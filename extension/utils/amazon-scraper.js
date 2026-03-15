@@ -1,5 +1,5 @@
 /**
- * NovaTryOnMe - Amazon Product Page Scraper
+ * GeminiTryOnMe - Amazon Product Page Scraper
  *
  * Extracts product information from the DOM of an Amazon product page.
  * Designed to work as a content script loaded before content.js.
@@ -8,7 +8,7 @@
 /**
  * Scrape product data from the current Amazon product page.
  *
- * @returns {{ imageUrl: string|null, title: string|null, breadcrumbs: string, asin: string|null }}
+ * @returns {{ imageUrl: string|null, title: string|null, breadcrumbs: string, productId: string|null, price: string|null, retailer: "amazon" }}
  */
 function scrapeProductData() {
   // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ function scrapeProductData() {
     price = priceEl.textContent.trim();
   }
 
-  return { imageUrl, title, breadcrumbs, asin, price };
+  return { imageUrl, title, breadcrumbs, productId: asin, price, retailer: "amazon" };
 }
 
 /**

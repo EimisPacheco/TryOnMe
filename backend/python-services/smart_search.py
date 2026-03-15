@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-NovaTryOnMe - Smart Search with Amazon Nova Act
+NovaTryOnMe - Smart Search with Playwright
 
-Searches Amazon for products using natural language, applies the mandatory
+Searches Amazon for products using browser automation, applies the mandatory
 4-star+ customer review filter, and extracts up to 20 product listings.
 
 Usage:
@@ -16,10 +16,12 @@ import argparse
 import json
 import sys
 import os
+import time
 from typing import Optional
+from urllib.parse import quote_plus
 
 from pydantic import BaseModel
-from nova_act import NovaAct
+from playwright.sync_api import sync_playwright
 
 
 # ---------------------------------------------------------------------------
@@ -60,44 +62,76 @@ def smart_search(query: str, headless: bool = True) -> list[dict]:
     log(f"Starting smart search for: {query}")
     log(f"Headless mode: {headless}")
 
-    with NovaAct(
-        starting_page=AMAZON_URL,
-        headless=headless,
-    ) as nova:
-        # Step 1: Search for the query
-        log("Step 1: Searching Amazon...")
-        nova.act(
-            f"Type '{query}' into the search bar and press Enter to search."
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-web-security",
+            ],
         )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+            locale="en-US",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        page = context.new_page()
+        page.set_default_timeout(45000)
+
+        # Stealth: remove navigator.webdriver flag that Amazon uses to detect automation
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
+
+        # Step 1: Navigate directly to search results (avoids homepage bot detection)
+        search_url = f"{AMAZON_URL}/s?k={quote_plus(query)}"
+        log(f"Step 1: Navigating to {search_url}")
+        page.goto(search_url, wait_until="domcontentloaded")
+
+        # Wait for product results to appear (more reliable than networkidle)
+        try:
+            page.wait_for_selector('[data-component-type="s-search-result"], [data-asin]', timeout=15000)
+            log("Step 1: Search results loaded")
+        except Exception:
+            log("Warning: Search result selectors not found, page might show CAPTCHA")
+            # Take screenshot for debugging
+            try:
+                page.screenshot(path="/tmp/amazon_debug.png")
+                log("Debug screenshot saved to /tmp/amazon_debug.png")
+            except Exception:
+                pass
 
         # Step 2: Apply 4-star+ customer reviews filter
         log("Step 2: Applying 4★+ customer review filter...")
         try:
-            nova.act(
-                "On the left sidebar, find the 'Customer Reviews' section. "
-                "Click on '4 Stars & Up' to filter results by 4+ star ratings."
-            )
+            star_filter = page.locator('[aria-label*="4 Stars & Up"]').first
+            if star_filter.is_visible(timeout=5000):
+                star_filter.click()
+                page.wait_for_load_state("networkidle")
+            else:
+                log("Warning: 4-star filter not visible, trying alternative...")
+                alt_filter = page.locator('section[aria-label="Customer Reviews"] a').first
+                if alt_filter.is_visible(timeout=3000):
+                    alt_filter.click()
+                    page.wait_for_load_state("networkidle")
+                else:
+                    log("Warning: Star filter not found, proceeding without it.")
         except Exception as e:
             log(f"Warning: Could not apply star filter: {e}")
-            # Try alternative approach
-            try:
-                nova.act(
-                    "Look for a filter or refinement option for customer reviews "
-                    "and select 4 stars and up."
-                )
-            except Exception:
-                log("Warning: Star filter not found, proceeding without it.")
 
         # Step 3: Extract products using Playwright DOM extraction
-        # (Nova Act's act_get hallucinates URLs, so we use page.evaluate instead)
         log("Step 3: Extracting product listings via DOM...")
         for round_num in range(MAX_SCROLL_ROUNDS):
             log(f"  Extraction round {round_num + 1}/{MAX_SCROLL_ROUNDS} "
                 f"(collected {len(all_products)} so far)...")
 
             try:
-                page = nova.page
-
                 raw_products = page.evaluate("""
                     () => {
                         let items = document.querySelectorAll('[data-component-type="s-search-result"]');
@@ -219,10 +253,13 @@ def smart_search(query: str, headless: bool = True) -> list[dict]:
             if round_num < MAX_SCROLL_ROUNDS - 1:
                 log("  Scrolling down for more products...")
                 try:
-                    nova.act("Scroll down the page to reveal more product results.")
+                    page.evaluate("window.scrollBy(0, 1500)")
+                    time.sleep(1.5)
                 except Exception as e:
                     log(f"  Error scrolling: {e}")
                     break
+
+        browser.close()
 
     # Trim to target count
     final_products = all_products[:TARGET_PRODUCT_COUNT]
@@ -241,7 +278,7 @@ def log(message: str):
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Smart Search: Amazon product search with Nova Act"
+        description="Smart Search: Amazon product search with Playwright"
     )
     parser.add_argument(
         "--query", "-q",

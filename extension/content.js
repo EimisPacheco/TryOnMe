@@ -1,5 +1,5 @@
 /**
- * NovaTryOnMe - Content Script
+ * GeminiTryOnMe - Content Script
  *
  * Injected into Amazon product pages. Orchestrates product analysis,
  * "Try It On" button injection, and the try-on panel experience.
@@ -20,13 +20,36 @@
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
-  let productData = null; // { imageUrl, title, breadcrumbs, asin, price }
+  let productData = null; // { imageUrl, title, breadcrumbs, productId, price, retailer }
   let productImageBase64 = null;
   let analysisResult = null; // Cached backend analysis response
   let panelOpen = false;
   let overlayCard = null; // The overlay element when open
   let currentPhotos = null; // Cached user photos for auto-refresh
   let currentIsCosmetic = false; // Cached cosmetic flag
+  let currentIsAccessory = false; // Cached accessory flag
+
+  // Non-blocking toast notification for content script context
+  function showPageToast(msg, duration = 3500) {
+    let toast = document.getElementById('nova-tryon-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'nova-tryon-toast';
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:12px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;z-index:2147483647;box-shadow:0 8px 32px rgba(0,0,0,0.3);transition:transform 0.3s ease,opacity 0.3s ease;opacity:0;max-width:400px;text-align:center;border:1px solid rgba(196,75,255,0.3);';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    // Trigger animation
+    requestAnimationFrame(() => {
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+      toast.style.opacity = '1';
+    });
+    clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => {
+      toast.style.transform = 'translateX(-50%) translateY(100px)';
+      toast.style.opacity = '0';
+    }, duration);
+  }
   let lastImageUrl = null; // Track last image URL to detect real changes
   let tryOnEnabled = false; // Toggle switch state: when ON, swatch clicks auto-trigger try-on
   let currentFraming = 'full'; // half or full body framing
@@ -36,7 +59,7 @@
   // Initialization
   // ---------------------------------------------------------------------------
   async function init() {
-    console.log("[NovaTryOnMe] Content script initializing...");
+    console.log("[GeminiTryOnMe] Content script initializing...");
 
     // Load framing preference from storage
     try {
@@ -44,38 +67,50 @@
       if (stored.tryOnFraming) currentFraming = stored.tryOnFraming;
     } catch (_) {}
 
-    // 1. Scrape the product page
+    // 1. Scrape the product page (retry if Temu hasn't loaded real images yet)
     productData = scrapeProductData();
-    if (!productData.imageUrl) {
-      console.warn("[NovaTryOnMe] Could not find product image. Aborting.");
+    if (!productData.imageUrl || productData.imageUrl.startsWith("data:")) {
+      // Temu lazy-loads images — wait up to 5s for a real CDN image
+      const host = window.location.hostname;
+      if (host.includes("temu.")) {
+        console.log("[GeminiTryOnMe] Temu: waiting for real product image to load...");
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await new Promise(r => setTimeout(r, 500));
+          productData = scrapeProductData();
+          if (productData.imageUrl && !productData.imageUrl.startsWith("data:")) break;
+        }
+      }
+    }
+    if (!productData.imageUrl || productData.imageUrl.startsWith("data:")) {
+      console.warn("[GeminiTryOnMe] Could not find product image. Aborting.");
       return;
     }
-    console.log("[NovaTryOnMe] Product scraped:", productData.title);
+    console.log("[GeminiTryOnMe] Product scraped:", productData.title);
 
     // 2. Fetch the product image as base64
     try {
       productImageBase64 = await fetchImageAsBase64(productData.imageUrl);
     } catch (err) {
-      console.error("[NovaTryOnMe] Failed to fetch product image:", err);
+      console.error("[GeminiTryOnMe] Failed to fetch product image:", err);
       return;
     }
 
-    // 3. Analyze the product via the backend (Nova 2 Lite)
+    // 3. Analyze the product via the backend (Gemini classifier)
     try {
       analysisResult = await ApiClient.analyzeProduct(
         productImageBase64,
         productData.title,
         productData.breadcrumbs
       );
-      console.log("[NovaTryOnMe] Analysis result:", analysisResult);
+      console.log("[GeminiTryOnMe] Analysis result:", analysisResult);
     } catch (err) {
-      console.error("[NovaTryOnMe] Product analysis failed:", err);
+      console.error("[GeminiTryOnMe] Product analysis failed:", err);
       // Still inject the button so the user can retry
     }
 
     // 4. Only inject the button if the product is a supported category
     if (analysisResult && analysisResult.supported === false) {
-      console.log("[NovaTryOnMe] Product not supported for try-on.");
+      console.log("[GeminiTryOnMe] Product not supported for try-on.");
       return;
     }
 
@@ -94,14 +129,86 @@
 
     if (changes.tryOnFraming) {
       currentFraming = changes.tryOnFraming.newValue || 'full';
-      console.log("[NovaTryOnMe] Framing changed to:", currentFraming);
+      console.log("[GeminiTryOnMe] Framing changed to:", currentFraming);
     }
 
     // Re-trigger try-on if overlay is open and pose or framing changed
     if ((changes.selectedPoseIndex || changes.tryOnFraming) && overlayCard && currentPhotos) {
-      console.log("[NovaTryOnMe] Pose/framing changed — re-triggering try-on");
+      console.log("[GeminiTryOnMe] Pose/framing changed — re-triggering try-on");
       performTryOn(overlayCard, currentPhotos, currentIsCosmetic);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Context Menu "Try On" — handle right-click on any image
+  // ---------------------------------------------------------------------------
+  let contextMenuImageUrl = null;
+
+  chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+    if (msg.type !== "CONTEXT_MENU_TRYON") return false;
+    console.log("[GeminiTryOnMe] Context menu try-on triggered:", msg.imageUrl?.substring(0, 80));
+    contextMenuImageUrl = msg.imageUrl;
+
+    (async () => {
+      try {
+        // If product data wasn't scraped, create minimal data from the image
+        if (!productData || !productData.imageUrl) {
+          productData = {
+            imageUrl: msg.imageUrl,
+            title: document.title || "",
+            breadcrumbs: "",
+            productId: null,
+            price: null,
+            retailer: window.location.hostname.replace("www.", "").split(".")[0],
+            productUrl: msg.pageUrl || window.location.href,
+          };
+        } else {
+          productData.imageUrl = msg.imageUrl;
+        }
+
+        // Fetch the right-clicked image as base64
+        productImageBase64 = await fetchImageAsBase64(msg.imageUrl);
+
+        // Analyze the product
+        try {
+          analysisResult = await ApiClient.analyzeProduct(
+            productImageBase64,
+            productData.title,
+            productData.breadcrumbs
+          );
+          console.log("[GeminiTryOnMe] Context menu analysis:", analysisResult);
+        } catch (err) {
+          console.warn("[GeminiTryOnMe] Context menu analysis failed:", err.message);
+        }
+
+        // Inject button if not present
+        if (!document.querySelector(".nova-tryon-btn")) {
+          injectTryOnButton();
+        }
+
+        // Fetch user photos and open overlay directly
+        const photos = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({ type: "GET_USER_PHOTOS" }, (res) => {
+            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+            if (res && res.error) return reject(new Error(res.error));
+            resolve(res.data || res);
+          });
+        });
+
+        if (!photos || !photos.bodyPhoto) {
+          // Open side panel so user can set up photos
+          chrome.runtime.sendMessage({ type: "OPEN_POPUP" });
+          return;
+        }
+
+        const isCosmetic = analysisResult && analysisResult.category === "cosmetics";
+        currentPhotos = photos;
+        currentIsCosmetic = isCosmetic;
+        openOverlay(photos, isCosmetic);
+      } catch (err) {
+        console.error("[GeminiTryOnMe] Context menu try-on failed:", err);
+      }
+    })();
   });
 
   // ---------------------------------------------------------------------------
@@ -111,14 +218,46 @@
     // Guard: don't inject a duplicate button
     if (document.querySelector(".nova-tryon-btn")) return;
 
-    // Use #imageBlock as anchor — it is STABLE and never replaced by Amazon's
-    // Twister system (unlike #imgTagWrapperId which gets destroyed on swatch change).
-    const anchor =
-      document.querySelector("#imageBlock") ||
-      document.querySelector("#leftCol");
+    // Use site-specific anchor from scraper registry
+    const siteConfig = getSiteConfig();
+    let anchor = null;
+    const host = window.location.hostname;
+
+    if (host.includes("temu.")) {
+      // Temu uses hashed class names — find the gallery by walking up from a kwcdn/temu image
+      const temuImgs = Array.from(document.querySelectorAll("img[src*='kwcdn.com'], img[src*='temu.com']"));
+      const largeTemu = temuImgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+      const anchorImg = largeTemu || temuImgs[0];
+      if (anchorImg) {
+        let el = anchorImg.parentElement;
+        for (let i = 0; i < 5 && el && el !== document.body; i++) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 300 && r.height > 300) { anchor = el; break; }
+          el = el.parentElement;
+        }
+        if (!anchor) anchor = anchorImg.parentElement;
+      }
+    } else {
+      anchor = document.querySelector(siteConfig.buttonAnchor);
+    }
+
+    // Generic fallback: find the largest visible image and walk up to a suitable container
+    if (!anchor) {
+      const imgs = Array.from(document.querySelectorAll("img"));
+      const largeImg = imgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+      if (largeImg) {
+        let el = largeImg.parentElement;
+        for (let i = 0; i < 5 && el && el !== document.body; i++) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 200 && r.height > 200) { anchor = el; break; }
+          el = el.parentElement;
+        }
+        if (!anchor) anchor = largeImg.closest("div");
+      }
+    }
 
     if (!anchor) {
-      console.warn("[NovaTryOnMe] No anchor element found for button.");
+      console.warn("[GeminiTryOnMe] No anchor element found for button.");
       return;
     }
 
@@ -131,7 +270,7 @@
     const btn = document.createElement("button");
     btn.className = "nova-tryon-btn nova-tryon-btn--pulse";
     btn.innerHTML = '<span class="nova-tryon-btn-icon">&#10024;</span> Try It On';
-    btn.setAttribute("aria-label", "Virtual Try-On with SuperNova TryOnMe");
+    btn.setAttribute("aria-label", "Virtual Try-On with Gemini TryOnMe Everything");
 
     // Tooltip element (hidden by default)
     const tooltip = document.createElement("div");
@@ -141,9 +280,9 @@
 
     btn.addEventListener("click", handleTryOnClick);
 
-    // Insert as direct child of #imageBlock — this survives swatch changes
+    // Insert as direct child of anchor — this survives swatch changes
     anchor.appendChild(btn);
-    console.log("[NovaTryOnMe] Try-On button injected into #imageBlock.");
+    console.log("[GeminiTryOnMe] Try-On button injected into", siteConfig.retailer, "page.");
   }
 
   // ---------------------------------------------------------------------------
@@ -177,8 +316,8 @@
         chrome.runtime.sendMessage({ type: "OPEN_POPUP" });
         return;
       }
-    } catch (_) {
-      // If GET_AUTH_STATUS fails, proceed anyway for backward compat
+    } catch (err) {
+      console.warn("[GeminiTryOnMe] Auth status check failed, proceeding:", err.message);
     }
 
     // Check if user has uploaded photos
@@ -193,20 +332,42 @@
         });
       });
     } catch (err) {
-      console.error("[NovaTryOnMe] Failed to check user photos:", err);
+      console.error("[GeminiTryOnMe] Failed to check user photos:", err);
       photos = { bodyPhoto: null, facePhoto: null };
     }
 
-    // Determine if this is a cosmetics product
-    const isCosmetic =
+    // Determine if this is a cosmetics or accessories product
+    let isCosmetic =
       analysisResult &&
       analysisResult.category &&
       analysisResult.category.toLowerCase().includes("cosmetic");
 
-    // Check for the appropriate photo type
-    const requiredPhoto = isCosmetic ? photos.facePhoto : photos.bodyPhoto;
+    let isAccessory =
+      analysisResult &&
+      analysisResult.category &&
+      analysisResult.category.toLowerCase() === "accessories" &&
+      !!analysisResult.accessoryType;
+
+    // Fallback detection from page title/breadcrumbs when analysis failed
+    if (!analysisResult && productData) {
+      const titleLower = (productData.title || "").toLowerCase();
+      const crumbsLower = (productData.breadcrumbs || "").toLowerCase();
+      const combined = titleLower + " " + crumbsLower;
+      if (/lipstick|lip\s*(gloss|balm|color|stain|tint)|eye\s*shadow|blush|foundation|concealer|mascara|eyeliner|makeup/i.test(combined)) {
+        isCosmetic = true;
+        // Set a minimal analysisResult for the try-on
+        analysisResult = { category: "cosmetics", cosmeticType: /lipstick|lip/i.test(combined) ? "lipstick" : /eye\s*shadow/i.test(combined) ? "eyeshadow" : /blush/i.test(combined) ? "blush" : /mascara/i.test(combined) ? "mascara" : /eyeliner/i.test(combined) ? "eyeliner" : "lipstick", color: null };
+      } else if (/earring|necklace|bracelet|ring|sunglasses/i.test(combined)) {
+        isAccessory = true;
+        analysisResult = { category: "accessories", accessoryType: /earring/i.test(combined) ? "earrings" : /necklace/i.test(combined) ? "necklace" : /bracelet/i.test(combined) ? "bracelet" : /sunglasses/i.test(combined) ? "sunglasses" : "earrings" };
+      }
+    }
+
+    // Cosmetics and accessories need face photo; clothing needs body photo
+    const requiredPhoto = (isCosmetic || isAccessory) ? photos.facePhoto : photos.bodyPhoto;
 
     if (!requiredPhoto) {
+      tooltip.textContent = (isCosmetic || isAccessory) ? "Please upload your face photos first" : "Please upload your photos first";
       tooltip.classList.add("nova-tryon-tooltip--visible");
       setTimeout(() => tooltip.classList.remove("nova-tryon-tooltip--visible"), 3000);
       chrome.runtime.sendMessage({ type: "OPEN_POPUP" });
@@ -214,16 +375,17 @@
     }
 
     // --- All checks passed: enable try-on mode ---
-    enableTryOn(btn, photos, isCosmetic);
+    enableTryOn(btn, photos, isCosmetic, isAccessory);
   }
 
   /**
    * Enable try-on mode: switch button to ON state, open overlay, trigger first try-on.
    */
-  function enableTryOn(btn, photos, isCosmetic) {
+  function enableTryOn(btn, photos, isCosmetic, isAccessory) {
     tryOnEnabled = true;
     currentPhotos = photos;
     currentIsCosmetic = isCosmetic;
+    currentIsAccessory = isAccessory || false;
 
     // Update button appearance to "ON" state
     btn.classList.add("nova-tryon-btn--active");
@@ -235,7 +397,7 @@
     tooltip.textContent = "Click to disable auto try-on";
     btn.appendChild(tooltip);
 
-    console.log("[NovaTryOnMe] Try-on mode ENABLED");
+    console.log("[GeminiTryOnMe] Try-on mode ENABLED");
 
     // Open overlay with first try-on
     if (!panelOpen) {
@@ -259,7 +421,7 @@
     tooltip.textContent = "Please upload your photos first";
     btn.appendChild(tooltip);
 
-    console.log("[NovaTryOnMe] Try-on mode DISABLED");
+    console.log("[GeminiTryOnMe] Try-on mode DISABLED");
 
     // Close the overlay (don't double-disable toggle since we already set it to false above)
     closeOverlay(false);
@@ -271,14 +433,38 @@
   function openOverlay(photos, isCosmetic) {
     panelOpen = true;
 
-    // Find the product image container (use a large container, not the tiny img wrapper)
-    const imageContainer =
-      document.querySelector("#imageBlock") ||
-      document.querySelector("#leftCol") ||
-      document.querySelector("#imgTagWrapperId");
+    // Find the product image container using site-specific selectors
+    const siteConfig = getSiteConfig();
+    let imageContainer = null;
+    const host = window.location.hostname;
+
+    if (host.includes("temu.")) {
+      // Temu: walk up from kwcdn image to find a suitable container
+      const temuImgs = Array.from(document.querySelectorAll("img[src*='kwcdn.com'], img[src*='temu.com']"));
+      const largeTemu = temuImgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+      const anchorImg = largeTemu || temuImgs[0];
+      if (anchorImg) {
+        let el = anchorImg.parentElement;
+        for (let i = 0; i < 5 && el && el !== document.body; i++) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 300 && r.height > 300) { imageContainer = el; break; }
+          el = el.parentElement;
+        }
+        if (!imageContainer) imageContainer = anchorImg.parentElement;
+      }
+    } else {
+      imageContainer = document.querySelector(siteConfig.imageContainer);
+    }
+
+    // Generic fallback
+    if (!imageContainer) {
+      const imgs = Array.from(document.querySelectorAll("img"));
+      const largeImg = imgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+      if (largeImg) imageContainer = largeImg.closest("div");
+    }
 
     if (!imageContainer) {
-      console.warn("[NovaTryOnMe] No image container found for overlay.");
+      console.warn("[GeminiTryOnMe] No image container found for overlay.");
       return;
     }
 
@@ -291,9 +477,10 @@
     // Create overlay card
     const card = document.createElement("div");
     card.className = "nova-tryon-overlay-card";
+    card.setAttribute("tabindex", "-1"); // Prevent Temu's autofocus management from interfering
     card.innerHTML = `
       <div class="nova-tryon-overlay-header">
-        <h3>SuperNova TryOnMe</h3>
+        <h3>Gemini TryOnMe Everything</h3>
         <button class="nova-tryon-overlay-close" aria-label="Close">&times;</button>
       </div>
       <div class="nova-tryon-overlay-body">
@@ -353,7 +540,7 @@
         tooltip.textContent = "Please upload your photos first";
         btn.appendChild(tooltip);
       }
-      console.log("[NovaTryOnMe] Try-on mode DISABLED (overlay closed by user)");
+      console.log("[GeminiTryOnMe] Try-on mode DISABLED (overlay closed by user)");
     }
   }
 
@@ -363,13 +550,24 @@
   function storeDebugImages(bodyPhotoBase64, garmentBase64, debugInfo) {
     const userPhoto = bodyPhotoBase64.startsWith("data:") ? bodyPhotoBase64 : "data:image/jpeg;base64," + bodyPhotoBase64;
     const garmentPhoto = garmentBase64.startsWith("data:") ? garmentBase64 : "data:image/jpeg;base64," + garmentBase64;
-    chrome.storage.local.set({
-      tryOnDebug: {
-        userPhoto,
-        garmentPhoto,
-        garmentImageUsed: debugInfo.garmentImageUsed || "original",
-        timestamp: Date.now(),
-      }
+
+    // Estimate size — skip if images are too large (>4MB combined) to avoid quota pressure
+    const estimatedBytes = (userPhoto.length + garmentPhoto.length) * 0.75;
+    if (estimatedBytes > 4 * 1024 * 1024) {
+      console.warn("[GeminiTryOnMe] Debug images too large, skipping storage");
+      return;
+    }
+
+    // Remove previous debug data before writing new
+    chrome.storage.local.remove("tryOnDebug", () => {
+      chrome.storage.local.set({
+        tryOnDebug: {
+          userPhoto,
+          garmentPhoto,
+          garmentImageUsed: debugInfo.garmentImageUsed || "original",
+          timestamp: Date.now(),
+        }
+      });
     });
   }
 
@@ -412,7 +610,7 @@
   async function performTryOn(card, photos, isCosmetic) {
     const body = card && card.querySelector ? card.querySelector(".nova-tryon-overlay-body") : null;
     if (!body) {
-      console.warn("[NovaTryOnMe] performTryOn: no overlay body found, skipping.");
+      console.warn("[GeminiTryOnMe] performTryOn: no overlay body found, skipping.");
       return;
     }
 
@@ -430,7 +628,7 @@
     const timerEl = body.querySelector("#tryOnElapsedTimer");
     const timerInterval = setInterval(() => {
       if (timerEl) timerEl.textContent = ((Date.now() - tryOnStart) / 1000).toFixed(1) + "s";
-    }, 100);
+    }, 1000);
 
     try {
       let resultImage;
@@ -441,6 +639,21 @@
         chrome.storage.local.get(["selectedPoseIndex"], (r) => resolve(r.selectedPoseIndex || 0));
       });
 
+      // Guard: if analysisResult is null, re-analyze before proceeding
+      if (!analysisResult && productImageBase64 && productData) {
+        console.log("[GeminiTryOnMe] analysisResult is null, re-analyzing before try-on...");
+        try {
+          analysisResult = await ApiClient.analyzeProduct(
+            productImageBase64,
+            productData.title,
+            productData.breadcrumbs
+          );
+          console.log("[GeminiTryOnMe] Re-analysis result:", analysisResult);
+        } catch (err) {
+          console.warn("[GeminiTryOnMe] Re-analysis failed:", err.message);
+        }
+      }
+
       if (isCosmetic) {
         const response = await ApiClient.tryOnCosmetics(
           photos.facePhoto,
@@ -448,16 +661,24 @@
           analysisResult.color || null
         );
         resultImage = response.resultImage;
+      } else if (currentIsAccessory) {
+        const response = await ApiClient.tryOnAccessory(
+          photos.facePhoto,
+          productImageBase64,
+          analysisResult.accessoryType || "earrings"
+        );
+        resultImage = response.resultImage;
       } else {
         // Send null as bodyImage so backend fetches the correct pose from S3 using poseIndex
-        console.log(`[NovaTryOnMe] Try-on params — poseIdx: ${currentPoseIdx}, framing: "${currentFraming}" (type: ${typeof currentFraming}), garmentClass: ${analysisResult ? analysisResult.garmentClass : 'null'}`);
+        console.log(`[GeminiTryOnMe] Try-on params — poseIdx: ${currentPoseIdx}, framing: "${currentFraming}" (type: ${typeof currentFraming}), garmentClass: ${analysisResult ? analysisResult.garmentClass : 'null'}`);
         const response = await ApiClient.tryOn(
           null,
           productImageBase64,
           analysisResult ? analysisResult.garmentClass : null,
           "SEAMLESS",
           currentFraming,
-          currentPoseIdx
+          currentPoseIdx,
+          productData ? productData.title : ""
         );
         resultImage = response.resultImage;
         debugInfo = response.debug;
@@ -469,13 +690,61 @@
       // If a newer try-on was started while we were waiting, discard this result
       if (thisRequestId !== tryOnRequestId) {
         clearInterval(timerInterval);
-        console.log(`[NovaTryOnMe] Discarding stale try-on result (req#${thisRequestId}, current is req#${tryOnRequestId})`);
+        console.log(`[GeminiTryOnMe] Discarding stale try-on result (req#${thisRequestId}, current is req#${tryOnRequestId})`);
         return;
       }
 
       // Stop timer and compute elapsed
       clearInterval(timerInterval);
       const tryOnElapsed = ((Date.now() - tryOnStart) / 1000).toFixed(1);
+
+      // Check if the result image is valid
+      if (!resultImage) {
+        console.error("[GeminiTryOnMe] No result image returned from API");
+        body.innerHTML = `
+          <div class="nova-tryon-error-msg">
+            <p>No image was generated. Please try again.</p>
+            <button class="nova-tryon-retry-btn" onclick="this.closest('.nova-tryon-overlay-card').querySelector('.nova-tryon-overlay-close').click()">Close</button>
+          </div>`;
+        return;
+      }
+
+      // If overlay card was detached from DOM (e.g. Temu React re-render), re-append it
+      if (!card.isConnected) {
+        console.warn("[GeminiTryOnMe] Overlay card was detached from DOM, re-appending...");
+        const siteConfig = getSiteConfig();
+        const host = window.location.hostname;
+        let container = null;
+        if (host.includes("temu.")) {
+          const temuImgs = Array.from(document.querySelectorAll("img[src*='kwcdn.com'], img[src*='temu.com']"));
+          const largeTemu = temuImgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+          const anchorImg = largeTemu || temuImgs[0];
+          if (anchorImg) {
+            let el = anchorImg.parentElement;
+            for (let i = 0; i < 5 && el && el !== document.body; i++) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 300 && r.height > 300) { container = el; break; }
+              el = el.parentElement;
+            }
+            if (!container) container = anchorImg.parentElement;
+          }
+        } else {
+          container = document.querySelector(siteConfig.imageContainer);
+        }
+        if (!container) {
+          const imgs = Array.from(document.querySelectorAll("img"));
+          const largeImg = imgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+          if (largeImg) container = largeImg.closest("div");
+        }
+        if (container) {
+          const containerStyle = window.getComputedStyle(container);
+          if (containerStyle.position === "static") container.style.position = "relative";
+          container.appendChild(card);
+          overlayCard = card;
+        } else {
+          console.error("[GeminiTryOnMe] Could not find container to re-append overlay");
+        }
+      }
 
       // Display the result (minimal overlay — controls are in the side panel)
       const resultDataUrl = base64ToDataUrl(resultImage);
@@ -487,18 +756,69 @@
         ${analysisResult && analysisResult.styleTips ? `
           <div class="nova-tryon-style-tips">
             <div class="nova-tryon-style-tips-title">Style Tips</div>
-            ${analysisResult.styleTips}
+            ${(Array.isArray(analysisResult.styleTips) ? analysisResult.styleTips : [analysisResult.styleTips])
+              .map(t => `<div class="nova-tryon-style-tip">${String(t).replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>`)
+              .join("")}
           </div>
         ` : ""}
-        <div style="text-align:center;">
-          <button class="nova-tryon-favorite-btn" data-asin="${productData.asin || ''}">
+        <div class="nova-tryon-action-row">
+          <button class="nova-tryon-favorite-btn" data-product-id="${productData.productId || ''}">
             <span class="nova-tryon-favorite-icon">\u2661</span> Save to Favorites
+          </button>
+        </div>
+        <div class="nova-tryon-share-row">
+          <button class="nova-tryon-share-btn nova-tryon-share-download" title="Download image">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </button>
+          <button class="nova-tryon-share-btn nova-tryon-share-copy" title="Copy to clipboard">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+            Copy
+          </button>
+          <button class="nova-tryon-share-btn nova-tryon-share-email" title="Share via email">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg>
+            Email
           </button>
         </div>
         <button class="nova-tryon-animate-btn">
           &#9654; Animate
         </button>
       `;
+
+      // After setting innerHTML, check AGAIN if card was detached (Temu React re-render race)
+      if (!card.isConnected) {
+        console.warn("[GeminiTryOnMe] Card detached during result render, re-appending...");
+        const host = window.location.hostname;
+        let reContainer = null;
+        if (host.includes("temu.")) {
+          const temuImgs = Array.from(document.querySelectorAll("img[src*='kwcdn.com'], img[src*='temu.com']"));
+          const largeTemu = temuImgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+          const anchorImg = largeTemu || temuImgs[0];
+          if (anchorImg) {
+            let el = anchorImg.parentElement;
+            for (let i = 0; i < 5 && el && el !== document.body; i++) {
+              const r = el.getBoundingClientRect();
+              if (r.width > 300 && r.height > 300) { reContainer = el; break; }
+              el = el.parentElement;
+            }
+            if (!reContainer) reContainer = anchorImg.parentElement;
+          }
+        } else {
+          const siteConfig = getSiteConfig();
+          reContainer = document.querySelector(siteConfig.imageContainer);
+        }
+        if (!reContainer) {
+          const imgs = Array.from(document.querySelectorAll("img"));
+          const largeImg = imgs.find(img => { const r = img.getBoundingClientRect(); return r.width > 200 && r.height > 200; });
+          if (largeImg) reContainer = largeImg.closest("div");
+        }
+        if (reContainer) {
+          const cs = window.getComputedStyle(reContainer);
+          if (cs.position === "static") reContainer.style.position = "relative";
+          reContainer.appendChild(card);
+          overlayCard = card;
+        }
+      }
 
       // Store debug images — fetch the actual pose used from backend
       if (debugInfo) {
@@ -534,30 +854,71 @@
             });
 
             if (!authStatus.isAuthenticated) {
-              alert("Please sign in to save favorites.");
+              showPageToast("Please sign in to save favorites.");
               return;
             }
 
-            console.log("[NovaTryOnMe] SAVE FAVORITE — asin:", productData.asin);
-            console.log("[NovaTryOnMe]   productImage:", productData.imageUrl ? "YES (" + productData.imageUrl.substring(0, 60) + "...)" : "NO");
-            console.log("[NovaTryOnMe]   tryOnResultImage:", resultImage ? "YES (length=" + resultImage.length + ", starts=" + resultImage.substring(0, 30) + "...)" : "NO/EMPTY");
+            console.log("[GeminiTryOnMe] SAVE FAVORITE — productId:", productData.productId, "retailer:", productData.retailer);
+            console.log("[GeminiTryOnMe]   productImage:", productData.imageUrl ? "YES (" + productData.imageUrl.substring(0, 60) + "...)" : "NO");
+            console.log("[GeminiTryOnMe]   tryOnResultImage:", resultImage ? "YES (length=" + resultImage.length + ", starts=" + resultImage.substring(0, 30) + "...)" : "NO/EMPTY");
 
             const favResult = await ApiClient.addFavorite({
-              asin: productData.asin || "",
+              productId: productData.productId || "",
+              retailer: productData.retailer || "amazon",
               productTitle: productData.title || "",
               productImage: productData.imageUrl || "",
+              productUrl: productData.productUrl || window.location.href,
               category: analysisResult ? analysisResult.category : "",
               garmentClass: analysisResult ? analysisResult.garmentClass : "",
               tryOnResultImage: resultImage,
             });
-            console.log("[NovaTryOnMe]   Save result:", JSON.stringify(favResult).substring(0, 200));
+            console.log("[GeminiTryOnMe]   Save result:", JSON.stringify(favResult).substring(0, 200));
 
             favBtn.innerHTML = '<span class="nova-tryon-favorite-icon">\u2665</span> Saved!';
             favBtn.classList.add("nova-tryon-favorite-btn--saved");
+            showPageToast("Added to favorites!");
           } catch (err) {
-            console.error("[NovaTryOnMe] Failed to save favorite:", err);
-            alert("Failed to save favorite: " + err.message);
+            console.error("[GeminiTryOnMe] Failed to save favorite:", err);
+            showPageToast("Failed to save favorite: " + err.message);
           }
+        });
+      }
+
+      // Share: Download
+      const downloadBtn = body.querySelector(".nova-tryon-share-download");
+      if (downloadBtn) {
+        downloadBtn.addEventListener("click", () => {
+          const a = document.createElement("a");
+          a.href = resultDataUrl;
+          a.download = `tryon_${productData.productId || "result"}_${Date.now()}.jpg`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+      }
+
+      // Share: Copy to clipboard
+      const copyBtn = body.querySelector(".nova-tryon-share-copy");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", async () => {
+          try {
+            const resp = await fetch(resultDataUrl);
+            const blob = await resp.blob();
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+            copyBtn.textContent = "Copied!";
+            setTimeout(() => { copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy'; }, 2000);
+          } catch (err) {
+            console.error("[GeminiTryOnMe] Copy failed:", err);
+            showPageToast("Failed to copy image to clipboard.");
+          }
+        });
+      }
+
+      // Share: Email
+      const emailBtn = body.querySelector(".nova-tryon-share-email");
+      if (emailBtn) {
+        emailBtn.addEventListener("click", () => {
+          showEmailShareDialog(resultImage, productData);
         });
       }
 
@@ -580,7 +941,7 @@
         <div class="nova-tryon-error">
           <div class="nova-tryon-error-icon">&#9888;</div>
           <div class="nova-tryon-error-text">Something went wrong</div>
-          <div class="nova-tryon-error-detail">${err.message}</div>
+          <div class="nova-tryon-error-detail">${String(err.message).replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>
           <button class="nova-tryon-retry-btn">Try Again</button>
         </div>
       `;
@@ -625,16 +986,16 @@
       // (c) Check for page URL change (SPA navigation to new product)
       const currentPageUrl = location.href;
       if (currentPageUrl !== lastPageUrl && !watchdogBusy) {
-        console.log("[NovaTryOnMe] Watchdog: PAGE URL CHANGED");
-        console.log("[NovaTryOnMe]   old URL:", lastPageUrl);
-        console.log("[NovaTryOnMe]   new URL:", currentPageUrl);
+        console.log("[GeminiTryOnMe] Watchdog: PAGE URL CHANGED");
+        console.log("[GeminiTryOnMe]   old URL:", lastPageUrl);
+        console.log("[GeminiTryOnMe]   new URL:", currentPageUrl);
         lastPageUrl = currentPageUrl;
         handlePageNavigation();
       }
 
       // (a) Ensure button is always present
       if (!document.querySelector(".nova-tryon-btn")) {
-        console.log("[NovaTryOnMe] Watchdog: button missing, re-injecting...");
+        console.log("[GeminiTryOnMe] Watchdog: button missing, re-injecting...");
         injectTryOnButton(); // This already adds handleTryOnClick listener
         // Restore active state if toggle is ON
         if (tryOnEnabled) {
@@ -655,11 +1016,11 @@
       // (b) Check for image URL change
       const newUrl = scrapeCurrentImageUrl();
       if (newUrl && newUrl !== lastImageUrl && !watchdogBusy) {
-        console.log("[NovaTryOnMe] Watchdog: IMAGE CHANGED");
-        console.log("[NovaTryOnMe]   old URL:", lastImageUrl?.substring(0, 80) + "...");
-        console.log("[NovaTryOnMe]   new URL:", newUrl.substring(0, 80) + "...");
-        console.log("[NovaTryOnMe]   tryOnEnabled:", tryOnEnabled);
-        console.log("[NovaTryOnMe]   panelOpen:", panelOpen);
+        console.log("[GeminiTryOnMe] Watchdog: IMAGE CHANGED");
+        console.log("[GeminiTryOnMe]   old URL:", lastImageUrl?.substring(0, 80) + "...");
+        console.log("[GeminiTryOnMe]   new URL:", newUrl.substring(0, 80) + "...");
+        console.log("[GeminiTryOnMe]   tryOnEnabled:", tryOnEnabled);
+        console.log("[GeminiTryOnMe]   panelOpen:", panelOpen);
         lastImageUrl = newUrl;
         productData.imageUrl = newUrl;
 
@@ -669,48 +1030,51 @@
       }
     }, 500);
 
-    console.log("[NovaTryOnMe] Watchdog polling active (500ms).");
+    console.log("[GeminiTryOnMe] Watchdog polling active (500ms).");
   }
 
   /**
    * Handle a detected variation/color change when try-on is enabled.
    */
   async function handleVariationChange(newUrl) {
-    console.log("[NovaTryOnMe] === VARIATION CHANGE HANDLER ===");
-    console.log("[NovaTryOnMe]   newUrl:", newUrl.substring(0, 80) + "...");
-    console.log("[NovaTryOnMe]   tryOnEnabled:", tryOnEnabled);
-    console.log("[NovaTryOnMe]   panelOpen:", panelOpen);
-    console.log("[NovaTryOnMe]   hasOverlayCard:", !!overlayCard);
-    console.log("[NovaTryOnMe]   hasCurrentPhotos:", !!currentPhotos);
+    console.log("[GeminiTryOnMe] === VARIATION CHANGE HANDLER ===");
+    console.log("[GeminiTryOnMe]   newUrl:", newUrl.substring(0, 80) + "...");
+    console.log("[GeminiTryOnMe]   tryOnEnabled:", tryOnEnabled);
+    console.log("[GeminiTryOnMe]   panelOpen:", panelOpen);
+    console.log("[GeminiTryOnMe]   hasOverlayCard:", !!overlayCard);
+    console.log("[GeminiTryOnMe]   hasCurrentPhotos:", !!currentPhotos);
     watchdogBusy = true;
 
     // Re-fetch the new product image
     try {
-      console.log("[NovaTryOnMe]   → Fetching new product image...");
+      console.log("[GeminiTryOnMe]   → Fetching new product image...");
       productImageBase64 = await fetchImageAsBase64(newUrl);
-      console.log("[NovaTryOnMe]   → Fetched, base64 length:", productImageBase64.length);
+      console.log("[GeminiTryOnMe]   → Fetched, base64 length:", productImageBase64.length);
     } catch (err) {
-      console.error("[NovaTryOnMe] Failed to fetch new variation image:", err);
+      console.error("[GeminiTryOnMe] Failed to fetch new variation image:", err);
       watchdogBusy = false;
       return;
     }
 
     // Re-analyze the product
     try {
-      console.log("[NovaTryOnMe]   → Re-analyzing product with Nova 2 Lite...");
+      console.log("[GeminiTryOnMe]   → Re-analyzing product with Gemini classifier...");
       analysisResult = await ApiClient.analyzeProduct(
         productImageBase64,
         productData.title,
         productData.breadcrumbs
       );
-      console.log("[NovaTryOnMe]   → Analysis result:", JSON.stringify(analysisResult));
+      console.log("[GeminiTryOnMe]   → Analysis result:", JSON.stringify(analysisResult));
     } catch (err) {
-      console.warn("[NovaTryOnMe] Re-analysis failed:", err.message);
+      console.warn("[GeminiTryOnMe] Re-analysis failed:", err.message);
+      // Analysis failed — don't proceed with try-on using stale/null data
+      watchdogBusy = false;
+      return;
     }
 
     // Auto-refresh the try-on overlay
-    console.log("[NovaTryOnMe]   → Checking overlay state: panelOpen=%s, overlayCard=%s, currentPhotos=%s", panelOpen, !!overlayCard, !!currentPhotos);
-    if (panelOpen && overlayCard && currentPhotos) {
+    console.log("[GeminiTryOnMe]   → Checking overlay state: panelOpen=%s, overlayCard=%s, currentPhotos=%s", panelOpen, !!overlayCard, !!currentPhotos);
+    if (panelOpen && overlayCard && currentPhotos && analysisResult) {
       const body = overlayCard.querySelector(".nova-tryon-overlay-body");
       if (body) {
         body.innerHTML = `
@@ -737,25 +1101,25 @@
    */
   async function handlePageNavigation() {
     watchdogBusy = true;
-    console.log("[NovaTryOnMe] === PAGE NAVIGATION HANDLER ===");
+    console.log("[GeminiTryOnMe] === PAGE NAVIGATION HANDLER ===");
 
     // Re-scrape the new product page
     const newProductData = scrapeProductData();
     if (!newProductData.imageUrl) {
-      console.warn("[NovaTryOnMe] New page has no product image, skipping.");
+      console.warn("[GeminiTryOnMe] New page has no product image, skipping.");
       watchdogBusy = false;
       return;
     }
 
     productData = newProductData;
     lastImageUrl = productData.imageUrl;
-    console.log("[NovaTryOnMe]   New product:", productData.title);
+    console.log("[GeminiTryOnMe]   New product:", productData.title);
 
     // Re-fetch the product image
     try {
       productImageBase64 = await fetchImageAsBase64(productData.imageUrl);
     } catch (err) {
-      console.error("[NovaTryOnMe] Failed to fetch new product image:", err);
+      console.error("[GeminiTryOnMe] Failed to fetch new product image:", err);
       watchdogBusy = false;
       return;
     }
@@ -767,9 +1131,9 @@
         productData.title,
         productData.breadcrumbs
       );
-      console.log("[NovaTryOnMe]   Analysis result:", JSON.stringify(analysisResult));
+      console.log("[GeminiTryOnMe]   Analysis result:", JSON.stringify(analysisResult));
     } catch (err) {
-      console.warn("[NovaTryOnMe] Product analysis failed:", err.message);
+      console.warn("[GeminiTryOnMe] Product analysis failed:", err.message);
     }
 
     // Re-inject button if needed (new page may not have it)
@@ -783,7 +1147,13 @@
         analysisResult &&
         analysisResult.category &&
         analysisResult.category.toLowerCase().includes("cosmetic");
+      const isAccessory =
+        analysisResult &&
+        analysisResult.category &&
+        analysisResult.category.toLowerCase() === "accessories" &&
+        !!analysisResult.accessoryType;
       currentIsCosmetic = isCosmetic;
+      currentIsAccessory = isAccessory;
 
       // Close existing overlay and open fresh one
       if (panelOpen && overlayCard) {
@@ -847,18 +1217,21 @@
         saveBtn.textContent = "Saving...";
         saveBtn.disabled = true;
         try {
-          const asin = productData?.asin || "";
+          const pId = productData?.productId || "";
           await ApiClient.saveVideo(
             videoResult.videoUrl || null,
             videoResult.videoBase64 || null,
-            asin,
+            pId,
             productData?.title || "",
-            productData?.imageUrl || ""
+            productData?.imageUrl || "",
+            productData?.retailer || "amazon"
           );
           saveBtn.textContent = "Saved!";
+          showPageToast("Video saved to your account!");
         } catch (err) {
-          console.error("[NovaTryOnMe] Failed to save video:", err);
+          console.error("[GeminiTryOnMe] Failed to save video:", err);
           saveBtn.textContent = "Failed";
+          showPageToast("Failed to save video: " + err.message);
           setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 2000);
         }
       });
@@ -882,7 +1255,7 @@
           downloadBtn.textContent = "Download";
           downloadBtn.disabled = false;
         } catch (err) {
-          console.error("[NovaTryOnMe] Download failed:", err);
+          console.error("[GeminiTryOnMe] Download failed:", err);
           downloadBtn.textContent = "Failed";
           setTimeout(() => { downloadBtn.textContent = "Download"; downloadBtn.disabled = false; }, 2000);
         }
@@ -893,7 +1266,7 @@
       btn.disabled = false;
     } catch (err) {
       clearInterval(videoTimerInterval);
-      console.error("[NovaTryOnMe] Video generation failed:", err);
+      console.error("[GeminiTryOnMe] Video generation failed:", err);
       btn.textContent = "\u25B6 Animate";
       btn.disabled = false;
       const errorDiv = document.createElement("div");
@@ -908,25 +1281,141 @@
    * @param {string} jobId - The video generation job ID
    * @returns {Promise<string>} URL of the completed video
    */
+  // Active abort controller for video polling — allows cancellation on navigation
+  let _videoPollAbort = null;
+
   async function pollVideoStatus(jobId, provider) {
-    const MAX_POLLS = 60;
-    const POLL_INTERVAL = 5000; // 5 seconds
+    const MAX_POLLS = 40;
+    const BASE_INTERVAL = 3000; // 3s initial
+    const MAX_INTERVAL = 15000; // cap at 15s
+
+    // Abort any previous polling
+    if (_videoPollAbort) _videoPollAbort.abort();
+    _videoPollAbort = new AbortController();
+    const signal = _videoPollAbort.signal;
 
     for (let i = 0; i < MAX_POLLS; i++) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      // Exponential backoff: 3s, 4.5s, 6.75s, ... capped at 15s
+      const delay = Math.min(BASE_INTERVAL * Math.pow(1.5, i), MAX_INTERVAL);
+      await new Promise((r) => setTimeout(r, delay));
+
+      if (signal.aborted) throw new Error("Video polling aborted");
 
       const status = await ApiClient.getVideoStatus(jobId, provider);
 
       if ((status.status === "Completed" || status.status === "COMPLETED") && (status.videoUrl || status.videoBase64)) {
+        _videoPollAbort = null;
         return status;
       }
       if (status.status === "Failed" || status.status === "FAILED") {
+        _videoPollAbort = null;
         throw new Error(status.failureMessage || status.error || "Video generation failed");
       }
       // Otherwise keep polling (IN_PROGRESS)
     }
 
+    _videoPollAbort = null;
     throw new Error("Video generation timed out");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Email Share Dialog
+  // ---------------------------------------------------------------------------
+  function showEmailShareDialog(resultImageBase64, product) {
+    // Remove existing dialog
+    const existing = document.getElementById("nova-tryon-email-dialog");
+    if (existing) existing.remove();
+
+    const dialog = document.createElement("div");
+    dialog.id = "nova-tryon-email-dialog";
+    dialog.className = "nova-tryon-email-dialog-overlay";
+    dialog.innerHTML = `
+      <div class="nova-tryon-email-dialog">
+        <div class="nova-tryon-email-dialog-header">
+          <h3>Share Try-On Result</h3>
+          <button class="nova-tryon-email-dialog-close">&times;</button>
+        </div>
+        <div class="nova-tryon-email-dialog-body">
+          <div class="nova-tryon-email-preview">
+            <img src="${base64ToDataUrl(resultImageBase64)}" alt="Try-on preview" />
+          </div>
+          <button class="nova-tryon-email-self-btn">Send to myself</button>
+          <div class="nova-tryon-email-field">
+            <label>Recipient Email</label>
+            <input type="email" class="nova-tryon-email-input" placeholder="friend@example.com" />
+          </div>
+          <div class="nova-tryon-email-field">
+            <label>Message (optional)</label>
+            <textarea class="nova-tryon-email-message" rows="2" placeholder="Check out how this looks on me!"></textarea>
+          </div>
+          <div class="nova-tryon-email-error" style="display:none;"></div>
+          <button class="nova-tryon-email-send-btn">Send Email</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // "Send to myself" — auto-fill with the logged-in user's email
+    const selfBtn = dialog.querySelector(".nova-tryon-email-self-btn");
+    chrome.storage.local.get(["userEmail"], (result) => {
+      if (result.userEmail) {
+        selfBtn.addEventListener("click", () => {
+          dialog.querySelector(".nova-tryon-email-input").value = result.userEmail;
+          selfBtn.textContent = "Filled!";
+          selfBtn.disabled = true;
+        });
+      } else {
+        selfBtn.style.display = "none";
+      }
+    });
+
+    // Close handlers
+    dialog.querySelector(".nova-tryon-email-dialog-close").addEventListener("click", () => dialog.remove());
+    dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.remove(); });
+
+    // Send handler
+    dialog.querySelector(".nova-tryon-email-send-btn").addEventListener("click", async () => {
+      const emailInput = dialog.querySelector(".nova-tryon-email-input");
+      const messageInput = dialog.querySelector(".nova-tryon-email-message");
+      const errorEl = dialog.querySelector(".nova-tryon-email-error");
+      const sendBtn = dialog.querySelector(".nova-tryon-email-send-btn");
+      const recipientEmail = emailInput.value.trim();
+
+      if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+        errorEl.textContent = "Please enter a valid email address.";
+        errorEl.style.display = "block";
+        return;
+      }
+
+      sendBtn.disabled = true;
+      sendBtn.textContent = "Sending...";
+      errorEl.style.display = "none";
+
+      try {
+        await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            type: "SHARE_EMAIL",
+            recipientEmail,
+            message: messageInput.value.trim(),
+            resultImage: resultImageBase64,
+            productTitle: product.title || "",
+          }, (res) => {
+            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+            if (res && res.error) return reject(new Error(res.error));
+            resolve(res?.data || res);
+          });
+        });
+        sendBtn.textContent = "Sent!";
+        sendBtn.style.background = "#00C853";
+        setTimeout(() => dialog.remove(), 1500);
+      } catch (err) {
+        errorEl.textContent = err.message || "Failed to send email.";
+        errorEl.style.display = "block";
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send Email";
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------

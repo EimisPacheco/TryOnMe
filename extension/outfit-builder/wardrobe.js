@@ -1,5 +1,5 @@
 /**
- * NovaTryOnMe — Virtual Wardrobe (Outfit Builder)
+ * GeminiTryOnMe — Virtual Wardrobe (Outfit Builder)
  *
  * Opens from popup Outfit Builder tab. Fires up to 3 parallel smart-searches,
  * populates wardrobe walls with hangers, enables item selection + try-on.
@@ -18,8 +18,30 @@ let userPosePhoto = null;
 let selectedPoseIndex = 0;
 let searchStartTime = 0;
 let timerInterval = null;
+
+// Non-blocking toast notification
+function showPageToast(msg, duration = 3500) {
+  let toast = document.getElementById('nova-wardrobe-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'nova-wardrobe-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:12px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;z-index:99999;box-shadow:0 8px 32px rgba(0,0,0,0.3);transition:transform 0.3s ease,opacity 0.3s ease;opacity:0;max-width:400px;text-align:center;border:1px solid rgba(196,75,255,0.3);';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  requestAnimationFrame(() => {
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+    toast.style.opacity = '1';
+  });
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.style.transform = 'translateX(-50%) translateY(100px)';
+    toast.style.opacity = '0';
+  }, duration);
+}
 let tryOnTimerInterval = null;
 let lastTryOnResultBase64 = null;
+let animating = false;
 
 // ---------------------------------------------------------------------------
 // Init — parse URL params, wire events, start searches
@@ -36,6 +58,7 @@ const sexSuffix = userSexParam === "male" ? "for men" : "for women";
 // Wire event listeners (NO inline handlers)
 document.getElementById("tryOnBtn").addEventListener("click", handleTryOn);
 document.getElementById("favoriteBtn").addEventListener("click", handleSaveFavorite);
+document.getElementById("animateBtn").addEventListener("click", handleAnimateOutfit);
 document.getElementById("errorCloseBtn").addEventListener("click", () => window.close());
 
 // Clean up large base64 data on page unload
@@ -115,7 +138,7 @@ async function searchCategory(category, query) {
       p._category = category;
     });
 
-    // Remove backgrounds from product images using Nova Canvas
+    // Remove backgrounds from product images using Gemini
     // Process in batches of 3 to avoid API rate limiting
     const maxItems = category === "shoes" ? 7 : 20;
     const items = products.slice(0, maxItems);
@@ -132,10 +155,10 @@ async function searchCategory(category, query) {
           });
           if (!imageBase64) return;
 
-          // Resize to fit Nova Canvas requirements [320, 4096] pixels
+          // Resize to fit image processor requirements [320, 4096] pixels
           const resizedBase64 = await resizeImageBase64(imageBase64);
 
-          // Remove background via Nova Canvas
+          // Remove background via Gemini image processor
           const noBgResult = await sendMessage({
             type: "REMOVE_BG",
             imageBase64: resizedBase64,
@@ -353,8 +376,9 @@ function selectItem(product, element) {
     showUserPhoto(userPosePhoto);
   }
 
-  // Hide favorite button when new selection changes
+  // Hide favorite and animate buttons when new selection changes
   document.getElementById("favoriteBtn").hidden = true;
+  document.getElementById("animateBtn").hidden = true;
   lastTryOnResultBase64 = null;
 
   console.log("[Wardrobe] Selected:", product.title, "category:", category,
@@ -466,6 +490,12 @@ async function handleTryOn() {
     favBtn.innerHTML = "&#9825; Save to Favorites";
     favBtn.classList.remove("vw-btn-favorite--saved");
 
+    // Show Animate button
+    const animBtn = document.getElementById("animateBtn");
+    animBtn.hidden = false;
+    animBtn.innerHTML = "&#9654; Animate";
+    animBtn.disabled = false;
+
   } catch (err) {
     stopTryOnTimer();
     console.error("[Wardrobe] Try-on failed:", err);
@@ -515,17 +545,18 @@ async function handleSaveFavorite() {
     // Save each item (all share the same try-on result image and outfitId)
     for (const { item, category, garmentClass } of outfitItems) {
       const asinMatch = (item.product_url || "").match(/\/dp\/([A-Z0-9]{10})/);
-      const asin = asinMatch ? asinMatch[1] : "";
-      if (!asin) continue;
+      const productId = asinMatch ? asinMatch[1] : "";
+      if (!productId) continue;
 
-      console.log(`[Wardrobe]   saving ${category}: asin=${asin}`);
+      console.log(`[Wardrobe]   saving ${category}: productId=${productId}`);
 
       await sendMessage({
         type: "API_CALL",
         endpoint: "/api/favorites",
         method: "POST",
         data: {
-          asin,
+          productId,
+          retailer: "amazon",
           productTitle: item.title || "",
           productImage: item.image_url || "",
           category,
@@ -539,9 +570,10 @@ async function handleSaveFavorite() {
     console.log("[Wardrobe] All outfit items saved");
     favBtn.innerHTML = "&#9829; Saved!";
     favBtn.classList.add("vw-btn-favorite--saved");
+    showPageToast("Outfit saved to favorites!");
   } catch (err) {
     console.error("[Wardrobe] Failed to save favorite:", err);
-    alert("Failed to save: " + err.message);
+    showPageToast("Failed to save: " + err.message);
     favBtn.innerHTML = "&#9825; Save to Favorites";
   } finally {
     favBtn.disabled = false;
@@ -607,7 +639,7 @@ function stopTryOnTimer() {
 }
 
 // ---------------------------------------------------------------------------
-// Image Resize — ensure images fit Nova Canvas [320, 4096] pixel range
+// Image Resize — ensure images fit image processor [320, 4096] pixel range
 // ---------------------------------------------------------------------------
 function resizeImageBase64(base64, minDim = 320, maxDim = 4096) {
   return new Promise((resolve) => {
@@ -659,6 +691,192 @@ function resizeImageBase64(base64, minDim = 320, maxDim = 4096) {
     // Add data URI prefix if missing
     img.src = base64.startsWith("data:") ? base64 : "data:image/jpeg;base64," + base64;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Video Animation
+// ---------------------------------------------------------------------------
+async function handleAnimateOutfit() {
+  if (!lastTryOnResultBase64 || animating) return;
+
+  animating = true;
+  const btn = document.getElementById("animateBtn");
+  btn.disabled = true;
+  btn.textContent = "Generating video... 0s";
+
+  const videoStart = Date.now();
+  const videoTimerInterval = setInterval(() => {
+    const elapsed = ((Date.now() - videoStart) / 1000).toFixed(0);
+    btn.textContent = `Generating video... ${elapsed}s`;
+  }, 1000);
+
+  try {
+    // Strip data URI prefix if present
+    let imageBase64 = lastTryOnResultBase64;
+    if (imageBase64.startsWith("data:")) {
+      imageBase64 = imageBase64.split(",")[1] || imageBase64;
+    }
+
+    const response = await sendMessage({ type: "GENERATE_VIDEO", imageBase64 });
+    const jobId = response.jobId;
+    const videoProvider = response.provider || "grok";
+
+    // Poll for video completion
+    const videoResult = await pollVideoStatus(jobId, videoProvider);
+
+    clearInterval(videoTimerInterval);
+    const videoElapsed = ((Date.now() - videoStart) / 1000).toFixed(1);
+
+    // Build video source
+    const videoSrc = videoResult.videoBase64
+      ? `data:${videoResult.videoMimeType || "video/mp4"};base64,${videoResult.videoBase64}`
+      : videoResult.videoUrl;
+
+    // Show video in an overlay on top of the mirror
+    const mirrorContent = document.getElementById("mirrorContent");
+    const overlay = document.createElement("div");
+    overlay.id = "videoOverlay";
+    overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;";
+
+    const video = document.createElement("video");
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.style.cssText = "max-width:95%;max-height:70%;border-radius:8px;";
+    const source = document.createElement("source");
+    source.src = videoSrc;
+    source.type = "video/mp4";
+    video.appendChild(source);
+    overlay.appendChild(video);
+
+    const actionsDiv = document.createElement("div");
+    actionsDiv.style.cssText = "margin-top:8px; display:flex; gap:8px; align-items:center;";
+
+    const elapsedSpan = document.createElement("span");
+    elapsedSpan.style.cssText = "font-size:11px; color:#aaa;";
+    elapsedSpan.textContent = `Generated in ${videoElapsed}s`;
+    actionsDiv.appendChild(elapsedSpan);
+
+    // Save button
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "vw-btn-tryon";
+    saveBtn.style.cssText = "font-size:12px; padding:4px 12px;";
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.textContent = "Saving...";
+      saveBtn.disabled = true;
+      try {
+        const productId = selectedItem ? ((selectedItem.product_url || "").match(/\/dp\/([A-Z0-9]{10})/) || [])[1] || "" : "";
+        await sendMessage({
+          type: "API_CALL",
+          endpoint: "/api/video/save",
+          method: "POST",
+          data: {
+            videoUrl: videoResult.videoUrl || null,
+            videoBase64: videoResult.videoBase64 || null,
+            productId,
+            retailer: "amazon",
+            productTitle: selectedItem?.title || "",
+            productImage: selectedItem?.image_url || "",
+          },
+        });
+        saveBtn.textContent = "Saved!";
+      } catch (err) {
+        console.error("[Wardrobe] Failed to save video:", err);
+        saveBtn.textContent = "Failed";
+        setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 2000);
+      }
+    });
+    actionsDiv.appendChild(saveBtn);
+
+    // Download button
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "vw-btn-tryon";
+    downloadBtn.style.cssText = "font-size:12px; padding:4px 12px;";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", async () => {
+      downloadBtn.textContent = "Downloading...";
+      downloadBtn.disabled = true;
+      try {
+        const resp = await fetch(videoSrc);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = "tryon-video-" + Date.now() + ".mp4";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+        downloadBtn.textContent = "Download";
+        downloadBtn.disabled = false;
+      } catch (err) {
+        console.error("[Wardrobe] Download failed:", err);
+        downloadBtn.textContent = "Failed";
+        setTimeout(() => { downloadBtn.textContent = "Download"; downloadBtn.disabled = false; }, 2000);
+      }
+    });
+    actionsDiv.appendChild(downloadBtn);
+
+    // Close button
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "vw-btn-tryon";
+    closeBtn.style.cssText = "font-size:12px; padding:4px 12px;";
+    closeBtn.textContent = "Close";
+    closeBtn.addEventListener("click", () => {
+      overlay.remove();
+    });
+    actionsDiv.appendChild(closeBtn);
+
+    overlay.appendChild(actionsDiv);
+    mirrorContent.style.position = "relative";
+    mirrorContent.appendChild(overlay);
+
+    btn.innerHTML = "&#9654; Animate";
+    btn.disabled = false;
+  } catch (err) {
+    clearInterval(videoTimerInterval);
+    console.error("[Wardrobe] Video generation failed:", err);
+    btn.innerHTML = "&#9654; Animate";
+    btn.disabled = false;
+    updateTryOnStatus("Video failed: " + err.message);
+    setTimeout(() => hideTryOnLoading(), 3000);
+  } finally {
+    animating = false;
+  }
+}
+
+let _videoPollAbort = null;
+
+async function pollVideoStatus(jobId, provider) {
+  const MAX_POLLS = 40;
+  const BASE_INTERVAL = 3000;
+  const MAX_INTERVAL = 15000;
+
+  if (_videoPollAbort) _videoPollAbort.abort();
+  _videoPollAbort = new AbortController();
+  const signal = _videoPollAbort.signal;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const delay = Math.min(BASE_INTERVAL * Math.pow(1.5, i), MAX_INTERVAL);
+    await new Promise((r) => setTimeout(r, delay));
+
+    if (signal.aborted) throw new Error("Video polling aborted");
+
+    const status = await sendMessage({ type: "GET_VIDEO_STATUS", jobId, provider });
+
+    if ((status.status === "Completed" || status.status === "COMPLETED") && (status.videoUrl || status.videoBase64)) {
+      _videoPollAbort = null;
+      return status;
+    }
+    if (status.status === "Failed" || status.status === "FAILED") {
+      _videoPollAbort = null;
+      throw new Error(status.failureMessage || status.error || "Video generation failed");
+    }
+  }
+
+  _videoPollAbort = null;
+  throw new Error("Video generation timed out");
 }
 
 // ---------------------------------------------------------------------------

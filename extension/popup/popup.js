@@ -1,11 +1,17 @@
 /**
- * NovaTryOnMe - Popup Script
+ * GeminiTryOnMe - Popup Script
  * Auth wizard + profile management
  */
 
 const MAX_IMAGE_DIMENSION = 1024;
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const DEFAULT_BACKEND_URL = 'http://localhost:3000';
+const DEFAULT_BACKEND_URL = 'https://geminitryonme-backend-81189935460.us-central1.run.app';
+
+// HTML escape helper to prevent XSS in innerHTML
+function esc(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+}
 
 // State
 let pendingSignupEmail = '';
@@ -48,6 +54,84 @@ function showToast(msg, duration = 3000) {
   toast.textContent = msg;
   toast.classList.add('show');
   setTimeout(() => { toast.classList.remove('show'); }, duration);
+}
+
+/**
+ * Lightweight canvas confetti burst for celebration moments.
+ * Spawns colorful particles that fall with gravity and fade out.
+ */
+function launchConfetti(durationMs = 3000) {
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:99999';
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const colors = ['#FF9900', '#FF6600', '#FFD700', '#00C853', '#2979FF', '#E040FB', '#FF4081', '#00E5FF'];
+  const particles = [];
+
+  for (let i = 0; i < 120; i++) {
+    particles.push({
+      x: canvas.width / 2 + (Math.random() - 0.5) * canvas.width * 0.5,
+      y: canvas.height * 0.3,
+      vx: (Math.random() - 0.5) * 12,
+      vy: Math.random() * -14 - 4,
+      w: Math.random() * 8 + 4,
+      h: Math.random() * 6 + 3,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      rotation: Math.random() * 360,
+      rotationSpeed: (Math.random() - 0.5) * 12,
+      opacity: 1,
+    });
+  }
+
+  const start = Date.now();
+  function frame() {
+    const elapsed = Date.now() - start;
+    if (elapsed > durationMs) {
+      canvas.remove();
+      return;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const fadeStart = durationMs * 0.6;
+    for (const p of particles) {
+      p.x += p.vx;
+      p.vy += 0.25; // gravity
+      p.y += p.vy;
+      p.rotation += p.rotationSpeed;
+      if (elapsed > fadeStart) {
+        p.opacity = Math.max(0, 1 - (elapsed - fadeStart) / (durationMs - fadeStart));
+      }
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate((p.rotation * Math.PI) / 180);
+      ctx.globalAlpha = p.opacity;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function getProductUrl(productIdOrItem, retailer) {
+  // If passed a favorite object, use stored productUrl if available
+  if (typeof productIdOrItem === 'object' && productIdOrItem !== null) {
+    if (productIdOrItem.productUrl) return productIdOrItem.productUrl;
+    const id = productIdOrItem.productId || productIdOrItem.asin;
+    retailer = productIdOrItem.retailer || retailer || 'amazon';
+    if (!id) return '#';
+    return getProductUrl(id, retailer);
+  }
+  const productId = productIdOrItem;
+  switch (retailer) {
+    case 'amazon': return `https://www.amazon.com/dp/${productId}`;
+    case 'shein': return `https://us.shein.com/goods-p-${productId}.html`;
+    case 'temu': return `https://www.temu.com/goods-${productId}.html`;
+    default: return '#';
+  }
 }
 
 function sendMsg(msg) {
@@ -177,15 +261,30 @@ async function handleSignup() {
 
   setLoading(btn, true);
   try {
-    await sendMsg({
+    const signupResult = await sendMsg({
       type: 'API_CALL', endpoint: '/api/auth/signup', method: 'POST',
       data: { email, password }
     });
-    pendingSignupEmail = email;
-    await chrome.storage.local.set({ pendingEmail: email, pendingPassword: password });
-    document.getElementById('verifyEmailDisplay').textContent = email;
-    showView('viewVerify');
+    console.log('[popup] Signup result:', signupResult);
+
+    // Backend auto-verifies users, so login immediately
+    const tokens = await sendMsg({
+      type: 'API_CALL', endpoint: '/api/auth/login', method: 'POST',
+      data: { email, password }
+    });
+    console.log('[popup] Auto-login after signup succeeded');
+    await chrome.storage.local.set({
+      authTokens: {
+        idToken: tokens.idToken,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresAt: Date.now() + (tokens.expiresIn * 1000),
+      },
+      userEmail: email,
+    });
+    showView('viewWizard1');
   } catch (err) {
+    console.error('[popup] Signup failed:', err.message);
     showError('signupError', err.message);
   } finally {
     setLoading(btn, false);
@@ -229,7 +328,6 @@ async function handleVerify() {
         userEmail: email,
       });
       await chrome.storage.local.remove(['pendingEmail', 'pendingPassword']);
-      showToast('Account created successfully');
       // Go to wizard step 1
       showView('viewWizard1');
     }
@@ -258,6 +356,7 @@ async function handleResendCode() {
 
 async function handleSignOut() {
   await chrome.storage.local.remove(['authTokens', 'userEmail']);
+  showToast('Signed out successfully');
   showView('viewSignIn');
 }
 
@@ -490,7 +589,7 @@ async function showFavoritesView() {
     const favorites = favData.favorites || [];
     console.log(`[popup] Favorites loaded: ${favorites.length}`);
     favorites.forEach((f, i) => {
-      console.log(`[popup]   [${i}] asin=${f.asin}`);
+      console.log(`[popup]   [${i}] productId=${f.productId || f.asin}`);
       console.log(`[popup]     tryOnResultKey="${f.tryOnResultKey || '(empty)'}"`);
       console.log(`[popup]     tryOnResultUrl=${f.tryOnResultUrl ? 'YES (' + f.tryOnResultUrl.substring(0, 80) + '...)' : 'NO'}`);
       console.log(`[popup]     productImage=${f.productImage ? 'YES' : 'NO'}`);
@@ -540,37 +639,45 @@ async function showFavoritesView() {
 
       const productImg = fav.productImage || '';
       const hasTryOnKey = !!fav.tryOnResultKey;
-      const title = fav.productTitle || fav.asin || 'Unknown product';
+      const title = fav.productTitle || (fav.productId || fav.asin) || 'Unknown product';
       const category = fav.category || fav.garmentClass || '';
       const date = fav.savedAt ? new Date(fav.savedAt).toLocaleDateString() : '';
+      const retailerLabels = { amazon: 'AMAZON', shein: 'SHEIN', temu: 'TEMU', google_shopping: 'GOOGLE SHOPPING' };
+      const retailerName = retailerLabels[fav.retailer] || (fav.retailer || 'AMAZON').toUpperCase();
 
       card.innerHTML = `
         <div class="fav-card-images">
-          ${hasTryOnKey ? `<img class="fav-card-img fav-card-tryon" id="tryonImg_${fav.asin}" src="" alt="Try-on" style="display:none">` : ''}
-          ${productImg ? `<img class="fav-card-img fav-card-product" src="${productImg}" alt="Product">` : ''}
+          ${hasTryOnKey ? `<img class="fav-card-img fav-card-tryon" id="tryonImg_${esc(fav.productId || fav.asin)}" src="" alt="Try-on" style="display:none">` : ''}
+          ${productImg ? `<img class="fav-card-img fav-card-product" src="${esc(productImg)}" alt="Product">` : ''}
         </div>
         <div class="fav-card-body">
-          <div class="fav-card-title">${title}</div>
-          <div class="fav-card-meta">${[category, date].filter(Boolean).join(' · ')}</div>
+          <span class="fav-card-retailer fav-retailer-${esc((fav.retailer || 'amazon').replace(/_/g, '-'))}">${esc(retailerName)}</span>
+          <div class="fav-card-title">${esc(title)}</div>
+          <div class="fav-card-meta">${esc([category, date].filter(Boolean).join(' · '))}</div>
         </div>
-        <button class="fav-card-remove" title="Remove" data-asin="${fav.asin}">&times;</button>
+        <button class="fav-card-remove" title="Remove" data-product-id="${esc(fav.productId || fav.asin)}">&times;</button>
       `;
 
       card.addEventListener('click', (e) => {
         if (e.target.classList.contains('fav-card-remove')) return;
-        if (fav.asin) chrome.tabs.create({ url: `https://www.amazon.com/dp/${fav.asin}` });
+        const url = getProductUrl(fav);
+        if (url !== '#') chrome.tabs.create({ url });
       });
 
       const removeBtn = card.querySelector('.fav-card-remove');
       removeBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         try {
-          await sendMsg({ type: 'API_CALL', endpoint: `/api/favorites/${fav.asin}`, method: 'DELETE', data: {} });
+          await sendMsg({ type: 'API_CALL', endpoint: `/api/favorites/${fav.productId || fav.asin}`, method: 'DELETE', data: {} });
           card.remove();
+          showToast('Favorite removed');
           if (list.querySelectorAll('.fav-card, .fav-outfit-card').length === 0) {
             container.innerHTML = '<div class="favorites-empty">No favorites yet.<br>Use the &#9825; button on try-on results to save items here.</div>';
           }
-        } catch (err) { console.error('[popup] Failed to remove favorite:', err); }
+        } catch (err) {
+          console.error('[popup] Failed to remove favorite:', err);
+          showToast('Failed to remove favorite');
+        }
       });
 
       list.appendChild(card);
@@ -584,13 +691,13 @@ async function showFavoritesView() {
       const date = items[0].savedAt ? new Date(items[0].savedAt).toLocaleDateString() : '';
       // Use first item's try-on image (all share the same result)
       const firstWithKey = items.find(i => i.tryOnResultKey);
-      const tryOnImgId = firstWithKey ? `tryonImg_outfit_${firstWithKey.asin}` : '';
+      const tryOnImgId = firstWithKey ? `tryonImg_outfit_${firstWithKey.productId || firstWithKey.asin}` : '';
 
       const itemRows = items.map(i => {
         const shortTitle = (i.productTitle || i.category || 'Item').split(' ').slice(0, 4).join(' ');
-        return `<div class="fav-outfit-row" data-asin="${i.asin}">
-          <img class="fav-outfit-thumb" src="${i.productImage || ''}" alt="${i.category}" title="${i.productTitle || i.category}">
-          <a class="fav-outfit-link" href="#">${shortTitle}</a>
+        return `<div class="fav-outfit-row" data-product-id="${esc(i.productId || i.asin)}" data-retailer="${esc(i.retailer || 'amazon')}">
+          <img class="fav-outfit-thumb" src="${esc(i.productImage || '')}" alt="${esc(i.category)}" title="${esc(i.productTitle || i.category)}">
+          <a class="fav-outfit-link" href="#">${esc(shortTitle)}</a>
         </div>`;
       }).join('');
 
@@ -599,6 +706,7 @@ async function showFavoritesView() {
           ${tryOnImgId ? `<img class="fav-card-img fav-card-tryon" id="${tryOnImgId}" src="" alt="Try-on" style="display:none">` : ''}
         </div>
         <div class="fav-card-body">
+          <span class="fav-card-retailer fav-retailer-${((items[0].retailer || 'amazon').replace(/_/g, '-'))}">${(items[0].retailer || 'AMAZON').toUpperCase().replace(/_/g, ' ')}</span>
           <div class="fav-card-title">Outfit (${items.length} items)</div>
           <div class="fav-outfit-items">${itemRows}</div>
           <div class="fav-card-meta">${date}</div>
@@ -611,8 +719,9 @@ async function showFavoritesView() {
         el.addEventListener('click', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          const asin = el.dataset.asin;
-          if (asin) chrome.tabs.create({ url: `https://www.amazon.com/dp/${asin}` });
+          const productId = el.dataset.productId;
+          const retailer = el.dataset.retailer || 'amazon';
+          if (productId) chrome.tabs.create({ url: getProductUrl(productId, retailer) });
         });
       });
 
@@ -621,13 +730,17 @@ async function showFavoritesView() {
         e.stopPropagation();
         try {
           for (const item of items) {
-            await sendMsg({ type: 'API_CALL', endpoint: `/api/favorites/${item.asin}`, method: 'DELETE', data: {} });
+            await sendMsg({ type: 'API_CALL', endpoint: `/api/favorites/${item.productId || item.asin}`, method: 'DELETE', data: {} });
           }
           card.remove();
+          showToast('Outfit removed');
           if (list.querySelectorAll('.fav-card, .fav-outfit-card').length === 0) {
             container.innerHTML = '<div class="favorites-empty">No favorites yet.<br>Use the &#9825; button on try-on results to save items here.</div>';
           }
-        } catch (err) { console.error('[popup] Failed to remove outfit:', err); }
+        } catch (err) {
+          console.error('[popup] Failed to remove outfit:', err);
+          showToast('Failed to remove outfit');
+        }
       });
 
       list.appendChild(card);
@@ -636,9 +749,10 @@ async function showFavoritesView() {
 
     function loadTryOnImage(fav, customId) {
       if (!fav.tryOnResultKey) return;
-      const imgId = customId || `tryonImg_${fav.asin}`;
+      const imgId = customId || `tryonImg_${fav.productId || fav.asin}`;
+      const retailer = fav.retailer || 'amazon';
       sendMsg({
-        type: 'API_CALL', endpoint: `/api/favorites/${fav.asin}/image`, method: 'GET', data: {}
+        type: 'API_CALL', endpoint: `/api/favorites/${fav.productId || fav.asin}/image?retailer=${retailer}`, method: 'GET', data: {}
       }).then((imgData) => {
         if (imgData && imgData.image) {
           const imgEl = document.getElementById(imgId);
@@ -654,7 +768,7 @@ async function showFavoritesView() {
           }
         }
       }).catch((err) => {
-        console.warn(`[popup] Failed to load try-on image for ${fav.asin}:`, err.message);
+        console.warn(`[popup] Failed to load try-on image for ${fav.productId || fav.asin}:`, err.message);
       });
     }
   } catch (err) {
@@ -693,7 +807,7 @@ async function showVideosView() {
       card.className = 'video-card';
 
       const date = video.savedAt ? new Date(video.savedAt).toLocaleDateString() : '';
-      const title = video.productTitle || video.asin || 'Try-on video';
+      const title = video.productTitle || (video.productId || video.asin) || 'Try-on video';
       const shortTitle = title.split(' ').slice(0, 5).join(' ');
 
       card.innerHTML = `
@@ -709,7 +823,7 @@ async function showVideosView() {
             </div>
           </div>
           <div class="video-card-actions">
-            ${video.asin ? `<a class="video-card-link" href="#" data-asin="${video.asin}">View on Amazon</a>` : ''}
+            ${(video.productId || video.asin) ? `<a class="video-card-link" href="#" data-product-id="${video.productId || video.asin}" data-retailer="${video.retailer || 'amazon'}">View Product</a>` : ''}
             <button class="video-card-delete" title="Remove video" data-video-id="${video.videoId}">&times;</button>
           </div>
         </div>
@@ -720,7 +834,7 @@ async function showVideosView() {
       if (amazonLink) {
         amazonLink.addEventListener('click', (e) => {
           e.preventDefault();
-          chrome.tabs.create({ url: `https://www.amazon.com/dp/${amazonLink.dataset.asin}` });
+          chrome.tabs.create({ url: getProductUrl(amazonLink.dataset.productId, amazonLink.dataset.retailer || 'amazon') });
         });
       }
 
@@ -731,11 +845,13 @@ async function showVideosView() {
         try {
           await sendMsg({ type: 'API_CALL', endpoint: `/api/video/${encodeURIComponent(videoId)}`, method: 'DELETE', data: {} });
           card.remove();
+          showToast('Video deleted');
           if (list.querySelectorAll('.video-card').length === 0) {
             container.innerHTML = '<div class="favorites-empty">No saved videos yet.<br>Use the "Save" button on generated videos to save them here.</div>';
           }
         } catch (err) {
           console.error('[popup] Failed to remove video:', err);
+          showToast('Failed to delete video');
         }
       });
 
@@ -835,7 +951,7 @@ async function handleEditRegenAiPhotos() {
     });
 
     if (!allPhotos.originals || allPhotos.originals.filter(Boolean).length < 5) {
-      alert('All 5 original photos are required before regenerating.');
+      showToast('All 5 original photos are required before regenerating.');
       return;
     }
 
@@ -872,7 +988,7 @@ async function handleEditRegenAiPhotos() {
 
 async function handleEditOriginalReplace(file, index) {
   if (!ALLOWED_TYPES.includes(file.type)) {
-    alert('Please upload a JPEG, PNG, or WebP image.');
+    showToast('Please upload a JPEG, PNG, or WebP image.');
     return;
   }
   const item = document.querySelector(`.edit-original-item[data-index="${index}"]`);
@@ -893,7 +1009,7 @@ async function handleEditOriginalReplace(file, index) {
     btn.textContent = 'Done!';
     setTimeout(() => { btn.textContent = origText; }, 1500);
   } catch (err) {
-    alert('Failed to replace photo: ' + err.message);
+    showToast('Failed to replace photo: ' + err.message);
     btn.textContent = origText;
   } finally {
     btn.disabled = false;
@@ -928,7 +1044,7 @@ async function handleWizard1Next() {
     // Open as a full tab for photo upload (popup closes when file dialogs open)
     openAsTab('wizard2');
   } catch (err) {
-    alert('Failed to save: ' + err.message);
+    showToast('Failed to save: ' + err.message);
   }
 }
 
@@ -955,7 +1071,7 @@ function isRunningAsTab() {
 async function handleMultiPhotoUpload(category, index, file) {
   console.log(`[upload] handleMultiPhotoUpload called: ${category} ${index}, file: ${file.name} (${file.type})`);
   if (!ALLOWED_TYPES.includes(file.type)) {
-    alert('Please upload a JPEG, PNG, or WebP image.');
+    showToast('Please upload a JPEG, PNG, or WebP image.');
     return;
   }
   try {
@@ -977,7 +1093,7 @@ async function handleMultiPhotoUpload(category, index, file) {
     console.log(`[upload] allFilled: ${allFilled}`);
   } catch (err) {
     console.error(`[upload] error:`, err);
-    alert('Failed to process image: ' + err.message);
+    showToast('Failed to process image: ' + err.message);
   }
 }
 
@@ -1001,6 +1117,8 @@ async function handleWizard2Next() {
     document.getElementById(`genImg${i}`).hidden = true;
   }
   document.getElementById('wizard3Done').hidden = true;
+  const successEl = document.getElementById('genSuccess');
+  if (successEl) successEl.hidden = true;
   clearError('genError');
 
   try {
@@ -1046,10 +1164,12 @@ async function handleWizard2Next() {
       });
     }
 
-    // Show success message and complete button
-    const successEl = document.getElementById('genSuccess');
-    if (successEl) successEl.hidden = false;
+    // Show success message, confetti, and complete button
+    const successEl2 = document.getElementById('genSuccess');
+    if (successEl2) successEl2.hidden = false;
     document.getElementById('wizard3Done').hidden = false;
+    showToast('Account created successfully! Welcome aboard!');
+    launchConfetti();
   } catch (err) {
     showError('genError', 'Generation failed: ' + err.message);
     // Mark all steps as error
@@ -1145,6 +1265,51 @@ async function saveBackendUrl() {
 }
 
 // ---------------------------------------------------------------------------
+// Cosmetics Face Selector
+// ---------------------------------------------------------------------------
+
+let cosmeticsFaceLoaded = false;
+async function loadCosmeticsFaceSelector() {
+  if (cosmeticsFaceLoaded) return;
+  const container = document.getElementById('cosmeticFaceSelector');
+  if (!container) return;
+  try {
+    const allPhotos = await sendMsg({
+      type: 'API_CALL', endpoint: '/api/profile/photos/all', method: 'GET', data: {}
+    });
+    const facePhotos = (allPhotos && allPhotos.originals || []).slice(3, 5).filter(Boolean);
+    if (facePhotos.length === 0) {
+      container.innerHTML = '<p class="cosmetics-face-loading">No face photos found. Upload them in Edit Profile.</p>';
+      return;
+    }
+
+    // Load stored face index preference
+    const stored = await chrome.storage.local.get(['selectedFaceIndex']);
+    let selectedFaceIndex = Math.min(stored.selectedFaceIndex || 0, facePhotos.length - 1);
+
+    container.innerHTML = '';
+    facePhotos.forEach((photo, i) => {
+      if (!photo) return;
+      const img = document.createElement('img');
+      img.className = 'cosmetics-face-thumb' + (i === selectedFaceIndex ? ' selected' : '');
+      img.src = `data:image/jpeg;base64,${photo}`;
+      img.alt = `Face ${i + 1}`;
+      img.addEventListener('click', () => {
+        container.querySelectorAll('.cosmetics-face-thumb').forEach(t => t.classList.remove('selected'));
+        img.classList.add('selected');
+        selectedFaceIndex = i;
+        chrome.storage.local.set({ selectedFaceIndex: i });
+      });
+      container.appendChild(img);
+    });
+    cosmeticsFaceLoaded = true;
+  } catch (err) {
+    console.error('[popup] Failed to load cosmetics face photos:', err);
+    container.innerHTML = '<p class="cosmetics-face-loading">Failed to load face photos.</p>';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Smart Search
 // ---------------------------------------------------------------------------
 
@@ -1213,14 +1378,16 @@ async function init() {
     });
   });
 
-  // Smart Search / Outfit Builder tab switching
+  // Smart Search / Outfit Builder / Cosmetics tab switching
   document.querySelectorAll('.search-mode-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.search-mode-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      const isSingle = tab.dataset.mode === 'single';
-      document.getElementById('panelSmartSearch').classList.toggle('hidden', !isSingle);
-      document.getElementById('panelOutfitBuilder').classList.toggle('hidden', isSingle);
+      const mode = tab.dataset.mode;
+      document.getElementById('panelSmartSearch').classList.toggle('hidden', mode !== 'single');
+      document.getElementById('panelOutfitBuilder').classList.toggle('hidden', mode !== 'outfit');
+      document.getElementById('panelCosmetics').classList.toggle('hidden', mode !== 'cosmetics');
+      if (mode === 'cosmetics') loadCosmeticsFaceSelector();
     });
   });
 
@@ -1363,3 +1530,415 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ===================== Giselle Voice Assistant (Gemini Live API) =====================
+(function initGiselle() {
+  const fab = document.getElementById('giselleFab');
+  const panel = document.getElementById('gisellePanel');
+  const closeBtn = document.getElementById('giselleClose');
+  const input = document.getElementById('giselleInput');
+  const micBtn = document.getElementById('giselleMicBtn');
+  const sendBtn = document.getElementById('giselleSendBtn');
+  const messagesEl = document.getElementById('giselleMessages');
+
+  if (!fab) return;
+
+  // State
+  let ws = null;
+  let isStreaming = false;
+  let captureContext = null;
+  let playbackContext = null;
+  let workletNode = null;
+  let mediaStream = null;
+  let audioQueue = [];
+  let nextPlayTime = 0;
+  let currentOutputMsg = null; // accumulates output transcription
+
+  // Get WebSocket URL from backend URL
+  async function getWsUrl() {
+    const stored = await chrome.storage.local.get(['backendUrl']);
+    const httpUrl = stored.backendUrl || DEFAULT_BACKEND_URL;
+    return httpUrl.replace(/^http/, 'ws') + '/ws/voice-live';
+  }
+
+  // Toggle panel
+  fab.addEventListener('click', () => {
+    const isHidden = panel.classList.contains('hidden');
+    panel.classList.toggle('hidden');
+    fab.classList.toggle('active', isHidden);
+    if (isHidden) input.focus();
+  });
+  closeBtn.addEventListener('click', () => {
+    panel.classList.add('hidden');
+    fab.classList.remove('active');
+    stopStreaming();
+  });
+
+  // Send text on Enter
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && input.value.trim()) {
+      sendTextMessage(input.value.trim());
+      input.value = '';
+    }
+  });
+  sendBtn.addEventListener('click', () => {
+    if (input.value.trim()) {
+      sendTextMessage(input.value.trim());
+      input.value = '';
+    }
+  });
+
+  // Mic button - toggle streaming
+  micBtn.addEventListener('click', () => {
+    if (isStreaming) {
+      stopStreaming();
+    } else {
+      startStreaming();
+    }
+  });
+
+  function addMessage(role, text) {
+    const msg = document.createElement('div');
+    msg.className = `giselle-msg giselle-msg-${role === 'user' ? 'user' : 'bot'}`;
+    msg.textContent = text;
+    messagesEl.appendChild(msg);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return msg;
+  }
+
+  // --- WebSocket connection ---
+
+  async function ensureWsConnected() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+
+    const wsUrl = await getWsUrl();
+    console.log('[Giselle] Connecting to', wsUrl);
+
+    return new Promise((resolve, reject) => {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('[Giselle] WebSocket connected');
+        // Send start message with user context
+        const userContext = {};
+        if (cachedProfile) {
+          userContext.name = cachedProfile.firstName || '';
+          userContext.size = cachedProfile.clothesSize || '';
+          userContext.sex = cachedProfile.sex || '';
+        }
+        ws.send(JSON.stringify({ type: 'start', userContext }));
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleServerMessage(msg, resolve);
+      };
+
+      ws.onerror = (e) => {
+        console.error('[Giselle] WebSocket error:', e);
+        reject(new Error('WebSocket connection failed'));
+      };
+
+      ws.onclose = () => {
+        console.log('[Giselle] WebSocket closed');
+        ws = null;
+        if (isStreaming) stopStreaming();
+      };
+    });
+  }
+
+  function handleServerMessage(msg, onSetupComplete) {
+    switch (msg.type) {
+      case 'setup_complete':
+        console.log('[Giselle] Session ready');
+        if (onSetupComplete) onSetupComplete();
+        break;
+
+      case 'audio':
+        playAudioChunk(msg.data, msg.mimeType);
+        break;
+
+      case 'turn_complete':
+        currentOutputMsg = null;
+        break;
+
+      case 'interrupted':
+        stopPlayback();
+        break;
+
+      case 'input_transcription':
+        if (msg.text) addMessage('user', msg.text);
+        break;
+
+      case 'output_transcription':
+        if (msg.text) {
+          if (!currentOutputMsg) {
+            currentOutputMsg = addMessage('bot', msg.text);
+          } else {
+            currentOutputMsg.textContent += msg.text;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          }
+        }
+        break;
+
+      case 'tool_call':
+        handleToolCalls(msg.functionCalls || []);
+        break;
+
+      case 'tool_call_cancellation':
+        console.log('[Giselle] Tool calls cancelled:', msg.ids);
+        break;
+
+      case 'go_away':
+        addMessage('bot', 'Session ending soon. Click the mic to start a new session.');
+        stopStreaming();
+        break;
+
+      case 'session_closed':
+        if (isStreaming) stopStreaming();
+        break;
+
+      case 'error':
+        addMessage('bot', msg.message || 'Something went wrong.');
+        console.error('[Giselle] Server error:', msg.message);
+        break;
+    }
+  }
+
+  // --- Audio capture ---
+
+  async function startStreaming() {
+    try {
+      addMessage('bot', 'Listening...');
+      await ensureWsConnected();
+
+      // Request microphone
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+
+      // Create capture AudioContext at 16kHz
+      captureContext = new AudioContext({ sampleRate: 16000 });
+      const source = captureContext.createMediaStreamSource(mediaStream);
+
+      // Load AudioWorklet
+      const workletUrl = chrome.runtime.getURL('popup/audio-worklet-processor.js');
+      await captureContext.audioWorklet.addModule(workletUrl);
+      workletNode = new AudioWorkletNode(captureContext, 'pcm-capture-processor');
+
+      // Send PCM chunks to backend
+      workletNode.port.onmessage = (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const int16Array = new Int16Array(e.data);
+          const base64 = int16ToBase64(int16Array);
+          ws.send(JSON.stringify({ type: 'audio', data: base64 }));
+        }
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(captureContext.destination); // required for worklet to process
+
+      // Create playback context at 24kHz for Gemini audio output
+      playbackContext = new AudioContext({ sampleRate: 24000 });
+      audioQueue = [];
+      nextPlayTime = 0;
+
+      isStreaming = true;
+      micBtn.classList.add('recording');
+      fab.classList.add('streaming');
+
+      console.log('[Giselle] Streaming started');
+    } catch (err) {
+      console.error('[Giselle] Failed to start streaming:', err);
+      addMessage('bot', 'Could not access microphone. Please grant permission and try again.');
+      stopStreaming();
+    }
+  }
+
+  function stopStreaming() {
+    // Stop audio capture
+    if (workletNode) {
+      workletNode.disconnect();
+      workletNode = null;
+    }
+    if (captureContext) {
+      captureContext.close().catch(() => {});
+      captureContext = null;
+    }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+
+    // Signal audio end to backend
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'audio_end' }));
+    }
+
+    stopPlayback();
+
+    isStreaming = false;
+    micBtn.classList.remove('recording');
+    fab.classList.remove('streaming');
+    currentOutputMsg = null;
+
+    console.log('[Giselle] Streaming stopped');
+  }
+
+  // --- Audio playback ---
+
+  function playAudioChunk(base64Data, mimeType) {
+    if (!playbackContext) return;
+
+    const int16 = base64ToInt16(base64Data);
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+      float32[i] = int16[i] / 32768;
+    }
+
+    const buffer = playbackContext.createBuffer(1, float32.length, 24000);
+    buffer.getChannelData(0).set(float32);
+
+    const source = playbackContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(playbackContext.destination);
+
+    // Schedule gapless playback
+    const now = playbackContext.currentTime;
+    if (nextPlayTime < now) nextPlayTime = now;
+    source.start(nextPlayTime);
+    audioQueue.push(source);
+    nextPlayTime += buffer.duration;
+
+    // Clean up finished sources
+    source.onended = () => {
+      const idx = audioQueue.indexOf(source);
+      if (idx !== -1) audioQueue.splice(idx, 1);
+    };
+  }
+
+  function stopPlayback() {
+    for (const source of audioQueue) {
+      try { source.stop(); } catch (_) {}
+    }
+    audioQueue = [];
+    nextPlayTime = 0;
+    if (playbackContext) {
+      playbackContext.close().catch(() => {});
+      playbackContext = new AudioContext({ sampleRate: 24000 });
+    }
+  }
+
+  // --- Base64 <-> Int16 conversion ---
+
+  function int16ToBase64(int16Array) {
+    const bytes = new Uint8Array(int16Array.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  function base64ToInt16(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Int16Array(bytes.buffer);
+  }
+
+  // --- Text message (fallback) ---
+
+  function sendTextMessage(text) {
+    addMessage('user', text);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'text', text }));
+    } else {
+      // If no WS session, start one and send text
+      ensureWsConnected().then(() => {
+        ws.send(JSON.stringify({ type: 'text', text }));
+      }).catch(() => {
+        addMessage('bot', 'Could not connect to voice service. Please try again.');
+      });
+    }
+  }
+
+  // --- Tool/intent handling ---
+
+  function handleToolCalls(functionCalls) {
+    for (const call of functionCalls) {
+      const data = call.args || {};
+      const responses = [];
+
+      switch (call.name) {
+        case 'search_product': {
+          if (data.query) {
+            const searchInput = document.getElementById('smartSearchInput');
+            if (searchInput) {
+              searchInput.value = data.query;
+              document.getElementById('smartSearchBtn')?.click();
+            }
+          }
+          responses.push({ id: call.id, name: call.name, response: { result: 'Search initiated' } });
+          break;
+        }
+        case 'build_outfit': {
+          document.getElementById('tabOutfitBuilder')?.click();
+          if (data.top) document.getElementById('outfitTop').value = data.top;
+          if (data.bottom) document.getElementById('outfitBottom').value = data.bottom;
+          if (data.shoes) document.getElementById('outfitShoes').value = data.shoes;
+          responses.push({ id: call.id, name: call.name, response: { result: 'Outfit builder opened' } });
+          break;
+        }
+        case 'add_to_cart': {
+          if (data.productUrl) {
+            sendMsg({
+              type: 'ADD_TO_CART',
+              productUrl: data.productUrl,
+              quantity: data.quantity || 1,
+            }).then(result => {
+              const toolResp = [{ id: call.id, name: call.name, response: { result: result?.success ? 'Added to cart' : 'Failed to add' } }];
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'tool_response', functionResponses: toolResp }));
+              }
+            }).catch(() => {
+              const toolResp = [{ id: call.id, name: call.name, response: { result: 'Error adding to cart' } }];
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'tool_response', functionResponses: toolResp }));
+              }
+            });
+            return; // async - don't send response below
+          }
+          responses.push({ id: call.id, name: call.name, response: { result: 'No product URL provided' } });
+          break;
+        }
+        case 'try_on': {
+          if (data.query) {
+            addMessage('bot', `I'll help you try on "${data.query}"! Search for it first.`);
+            const searchInput = document.getElementById('smartSearchInput');
+            if (searchInput) {
+              searchInput.value = data.query;
+              document.getElementById('smartSearchBtn')?.click();
+            }
+          }
+          responses.push({ id: call.id, name: call.name, response: { result: 'Try-on search initiated' } });
+          break;
+        }
+        case 'show_favorites': {
+          document.getElementById('profileFavorites')?.click();
+          responses.push({ id: call.id, name: call.name, response: { result: 'Favorites shown' } });
+          break;
+        }
+        default:
+          responses.push({ id: call.id, name: call.name, response: { result: 'Unknown action' } });
+      }
+
+      // Send tool responses back
+      if (responses.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'tool_response', functionResponses: responses }));
+      }
+    }
+  }
+})();

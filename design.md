@@ -473,13 +473,13 @@ test('image validation accepts valid images and rejects invalid ones', () => {
 - CDN for static asset delivery (animations, cached previews)
 - Load balancer with health checks
 - Auto-scaling groups for renderer services
-- Message queue (SQS/RabbitMQ) for async rendering jobs
+- Message queue (Cloud Tasks/RabbitMQ) for async rendering jobs
 
 ### Privacy and Security
 
 **Data Protection:**
 - AES-256 encryption for all stored profile images
-- Encryption keys managed through AWS KMS or equivalent
+- Encryption keys managed through Google Cloud KMS or equivalent
 - Images stored in isolated buckets with strict IAM policies
 - No image data logged or included in analytics
 

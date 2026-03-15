@@ -1,11 +1,11 @@
 /**
- * NovaTryOnMe - Background Service Worker
+ * GeminiTryOnMe - Background Service Worker
  *
  * Routes messages between content scripts, popup, and the backend API.
  * Handles auth token injection for all API calls.
  */
 
-const DEFAULT_BACKEND_URL = "http://localhost:3000";
+const DEFAULT_BACKEND_URL = "https://geminitryonme-backend-81189935460.us-central1.run.app";
 
 async function getBackendUrl() {
   return new Promise((resolve) => {
@@ -79,118 +79,74 @@ async function tryRefreshToken() {
       },
     });
     return true;
-  } catch (_) {
+  } catch (err) {
+    console.warn("[bg] Token refresh failed:", err.message);
     return false;
   }
 }
 
 /**
- * Forward a POST request to the backend with auth headers.
+ * Forward an API request to the backend with auth headers and 401 retry.
  */
-async function apiPost(endpoint, data, retry = true) {
+async function apiFetch(method, endpoint, data, retry = true) {
   const backendUrl = await getBackendUrl();
   const url = `${backendUrl}${endpoint}`;
   const headers = await buildHeaders();
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(data),
-  });
+  const opts = { method, headers };
+  if (data !== undefined) {
+    opts.body = JSON.stringify(data);
+  }
+
+  console.log(`[bg] fetch: ${method} ${url}`);
+  const response = await fetch(url, opts);
+  console.log(`[bg] fetch response: ${method} ${endpoint} → ${response.status}`);
 
   if (response.status === 401 && retry) {
+    console.log(`[bg] 401 received, attempting token refresh...`);
     const refreshed = await tryRefreshToken();
-    if (refreshed) return apiPost(endpoint, data, false);
+    if (refreshed) {
+      console.log(`[bg] Token refreshed, retrying ${method} ${endpoint}`);
+      return apiFetch(method, endpoint, data, false);
+    }
+    console.warn(`[bg] Token refresh failed, returning 401 error`);
   }
 
   if (!response.ok) {
     const errorText = await response.text();
+    console.error(`[bg] API error: ${method} ${endpoint} → ${response.status}: ${errorText}`);
     throw new Error(`API error ${response.status}: ${errorText}`);
   }
 
   return response.json();
 }
 
-/**
- * Forward a GET request to the backend with auth headers.
- */
-async function apiGet(endpoint, retry = true) {
-  const backendUrl = await getBackendUrl();
-  const url = `${backendUrl}${endpoint}`;
-  const headers = await buildHeaders();
+function apiPost(endpoint, data) { return apiFetch("POST", endpoint, data); }
+function apiGet(endpoint) { return apiFetch("GET", endpoint); }
+function apiDelete(endpoint) { return apiFetch("DELETE", endpoint); }
+function apiPut(endpoint, data) { return apiFetch("PUT", endpoint, data); }
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers,
-  });
-
-  if (response.status === 401 && retry) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) return apiGet(endpoint, false);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API error ${response.status}: ${errorText}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Forward a DELETE request to the backend with auth headers.
- */
-async function apiDelete(endpoint, retry = true) {
-  const backendUrl = await getBackendUrl();
-  const url = `${backendUrl}${endpoint}`;
-  const headers = await buildHeaders();
-
-  const response = await fetch(url, {
-    method: "DELETE",
-    headers,
-  });
-
-  if (response.status === 401 && retry) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) return apiDelete(endpoint, false);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API error ${response.status}: ${errorText}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Forward a PUT request to the backend with auth headers.
- */
-async function apiPut(endpoint, data, retry = true) {
-  const backendUrl = await getBackendUrl();
-  const url = `${backendUrl}${endpoint}`;
-  const headers = await buildHeaders();
-
-  const response = await fetch(url, {
-    method: "PUT",
-    headers,
-    body: JSON.stringify(data),
-  });
-
-  if (response.status === 401 && retry) {
-    const refreshed = await tryRefreshToken();
-    if (refreshed) return apiPut(endpoint, data, false);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API error ${response.status}: ${errorText}`);
-  }
-
-  return response.json();
-}
+// Allowed image CDN domains for proxy fetch (prevents open-proxy abuse)
+const ALLOWED_IMAGE_HOSTS = [
+  "m.media-amazon.com", "images-na.ssl-images-amazon.com", "images-eu.ssl-images-amazon.com",
+  "img.ltwebstatic.com", "img.kwcdn.com",
+  "ae01.alicdn.com", "i.imgur.com",
+  "encrypted-tbn0.gstatic.com", "encrypted-tbn1.gstatic.com", "encrypted-tbn2.gstatic.com", "encrypted-tbn3.gstatic.com",
+  "lh3.googleusercontent.com", "shopping.googleusercontent.com",
+];
 
 async function proxyImageFetch(imageUrl) {
+  // Validate URL against allowed CDN domains
+  try {
+    const parsed = new URL(imageUrl);
+    if (!ALLOWED_IMAGE_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith("." + h))) {
+      throw new Error(`Image proxy blocked: ${parsed.hostname} is not an allowed CDN`);
+    }
+  } catch (e) {
+    if (e.message.includes("proxy blocked")) throw e;
+    throw new Error("Invalid image URL for proxy");
+  }
+
   const response = await fetch(imageUrl);
   const blob = await response.blob();
 
@@ -267,7 +223,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         case "TRY_ON": {
-          console.log(`[background] TRY_ON — framing: "${message.framing}", poseIndex: ${message.poseIndex}, garmentClass: "${message.garmentClass}"`);
+          console.log(`[background] TRY_ON — framing: "${message.framing}", poseIndex: ${message.poseIndex}, garmentClass: "${message.garmentClass}", title: "${message.productTitle || ""}"`);
           const result = await apiPost("/api/try-on", {
             sourceImage: message.bodyImageBase64,
             referenceImage: message.garmentImageBase64,
@@ -276,6 +232,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             framing: message.framing || "full",
             poseIndex: message.poseIndex ?? 0,
             quickMode: message.quickMode || false,
+            productTitle: message.productTitle || "",
           });
           sendResponse({ data: result });
           break;
@@ -297,6 +254,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             faceImage: message.faceImageBase64,
             cosmeticType: message.cosmeticType,
             color: message.color,
+          });
+          sendResponse({ data: result });
+          break;
+        }
+
+        case "TRY_ON_ACCESSORY": {
+          const result = await apiPost("/api/accessories", {
+            faceImage: message.faceImageBase64,
+            productImage: message.productImageBase64,
+            accessoryType: message.accessoryType,
           });
           sendResponse({ data: result });
           break;
@@ -333,9 +300,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
+        case "VOICE_CHAT": {
+          const result = await apiPost("/api/voice", {
+            message: message.text,
+            history: message.history || [],
+            userContext: message.userContext || {},
+          });
+          sendResponse({ data: result });
+          break;
+        }
+
         case "SMART_SEARCH": {
           const result = await apiPost("/api/smart-search", {
             query: message.query,
+          });
+          sendResponse({ data: result });
+          break;
+        }
+
+        case "SHARE_EMAIL": {
+          const result = await apiPost("/api/share/email", {
+            recipientEmail: message.recipientEmail,
+            message: message.message || "",
+            resultImage: message.resultImage,
+            productTitle: message.productTitle || "",
           });
           sendResponse({ data: result });
           break;
@@ -350,7 +338,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         case "API_CALL": {
           const method = (message.method || "").toUpperCase();
           const endpoint = message.endpoint;
+          console.log(`[bg] API_CALL: ${method} ${endpoint}`);
+
+          // Whitelist allowed API endpoints to prevent abuse from compromised content scripts
+          const ALLOWED_PREFIXES = [
+            "/api/auth", "/api/profile", "/api/favorites", "/api/try-on", "/api/cosmetics",
+            "/api/accessories", "/api/video", "/api/analyze", "/api/image",
+            "/api/smart-search", "/api/voice", "/api/cart", "/api/share",
+          ];
+          if (!ALLOWED_PREFIXES.some(p => endpoint.startsWith(p))) {
+            console.warn(`[bg] Blocked endpoint: ${endpoint}`);
+            sendResponse({ error: `Endpoint not allowed: ${endpoint}` });
+            break;
+          }
+
           let result;
+          const startTime = Date.now();
 
           if (method === "PUT") {
             result = await apiPut(endpoint, message.data || {});
@@ -361,6 +364,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           } else {
             result = await apiPost(endpoint, message.data);
           }
+          console.log(`[bg] API_CALL done: ${method} ${endpoint} (${Date.now() - startTime}ms)`);
           sendResponse({ data: result });
           break;
         }
@@ -368,6 +372,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         case "GET_PHOTOS": {
           const photos = await getStoredPhotos();
           sendResponse({ data: photos });
+          break;
+        }
+
+        case "ADD_TO_CART": {
+          const result = await apiPost("/api/cart/add", {
+            productUrl: message.productUrl,
+            quantity: message.quantity || 1,
+          });
+          sendResponse({ data: result });
           break;
         }
 
@@ -380,11 +393,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
+        case "OPEN_URL": {
+          // Open a URL in a new tab — used by content scripts that can't window.open due to CSP
+          if (message.url) {
+            chrome.tabs.create({ url: message.url });
+          }
+          sendResponse({ data: { opened: true } });
+          break;
+        }
+
         default:
           sendResponse({ error: `Unknown message type: ${message.type}` });
       }
     } catch (err) {
-      console.error("[NovaTryOnMe background] Error:", err);
+      console.error("[GeminiTryOnMe background] Error:", err);
       sendResponse({ error: err.message });
     }
   })();
@@ -401,4 +423,60 @@ chrome.action.onClicked.addListener(async (tab) => {
 // This is handled inside the message listener but we also set side panel behavior
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
-console.log("[NovaTryOnMe] Background service worker started.");
+// ---------------------------------------------------------------------------
+// Context Menu — "Try On with Gemini TryOnMe" on right-click any image
+// ---------------------------------------------------------------------------
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "gemini-tryon-image",
+    title: "Try On with Gemini TryOnMe",
+    contexts: ["image"],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== "gemini-tryon-image") return;
+  const imageUrl = info.srcUrl;
+  if (!imageUrl) return;
+
+  console.log("[bg] Context menu try-on for image:", imageUrl?.substring(0, 80));
+
+  // Check if content script is already injected
+  let alreadyInjected = false;
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => !!window.__novaTryOnMeLoaded,
+    });
+    alreadyInjected = result?.result === true;
+  } catch (_) {}
+
+  if (!alreadyInjected) {
+    // Inject content scripts dynamically on unsupported sites
+    try {
+      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["styles/content.css"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["utils/scraper-registry.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["utils/image-utils.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["utils/api-client.js"] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+    } catch (err) {
+      console.warn("[bg] Failed to inject content scripts:", err.message);
+    }
+  }
+
+  // Send the image URL to content script
+  const delay = alreadyInjected ? 100 : 500;
+  setTimeout(() => {
+    chrome.tabs.sendMessage(tab.id, {
+      type: "CONTEXT_MENU_TRYON",
+      imageUrl,
+      pageUrl: info.pageUrl,
+    }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[bg] Context menu message:", chrome.runtime.lastError.message);
+      }
+    });
+  }, delay);
+});
+
+console.log("[GeminiTryOnMe] Background service worker started.");

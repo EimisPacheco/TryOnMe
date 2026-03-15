@@ -2,21 +2,11 @@ const express = require("express");
 const router = express.Router();
 const fs = require("fs");
 const path = require("path");
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { requireAuth } = require("../middleware/auth");
-const { getProfile, putProfile } = require("../services/dynamodb");
+const { validateBase64Image } = require("../middleware/validation");
+const { getProfile, putProfile } = require("../services/firestore");
 const { generateProfilePhoto } = require("../services/gemini");
-
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    ...(process.env.AWS_SESSION_TOKEN && { sessionToken: process.env.AWS_SESSION_TOKEN }),
-  },
-});
-
-const S3_USER_BUCKET = process.env.S3_USER_BUCKET || "nova-tryonme-users";
+const storage = require("../services/storage");
 
 // GET /api/profile
 router.get("/", requireAuth, async (req, res, next) => {
@@ -35,20 +25,38 @@ router.get("/", requireAuth, async (req, res, next) => {
 router.put("/", requireAuth, async (req, res, next) => {
   try {
     const { birthday } = req.body;
-    // Strip HTML/script tags from text fields to prevent XSS
-    const stripTags = (s) => typeof s === "string" ? s.replace(/<[^>]*>/g, "").trim() : s;
-    const firstName = stripTags(req.body.firstName);
-    const lastName = stripTags(req.body.lastName);
-    const country = stripTags(req.body.country);
-    const city = stripTags(req.body.city);
+
+    // Sanitize text fields: strip HTML tags, entities, and control characters
+    const sanitize = (s) => {
+      if (typeof s !== "string") return s;
+      return s
+        .replace(/<[^>]*>/g, "")           // strip HTML tags
+        .replace(/&[#\w]+;/g, "")          // strip HTML entities (&amp; &#x27; etc.)
+        .replace(/javascript\s*:/gi, "")   // strip javascript: URIs
+        .replace(/on\w+\s*=/gi, "")        // strip inline event handlers (onclick= etc.)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "") // strip control characters
+        .trim()
+        .slice(0, 200);                    // enforce max length
+    };
+
+    const firstName = sanitize(req.body.firstName);
+    const lastName = sanitize(req.body.lastName);
+    const country = sanitize(req.body.country);
+    const city = sanitize(req.body.city);
     const sex = req.body.sex === "male" || req.body.sex === "female" ? req.body.sex : undefined;
-    const clothesSize = stripTags(req.body.clothesSize);
-    const shoesSize = req.body.shoesSize ? String(req.body.shoesSize).trim() : undefined;
+    const clothesSize = sanitize(req.body.clothesSize);
+    const shoesSize = req.body.shoesSize ? String(req.body.shoesSize).trim().slice(0, 20) : undefined;
 
     // Calculate age from birthday
     let age = null;
     if (birthday) {
+      if (typeof birthday !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(birthday)) {
+        return res.status(400).json({ error: "birthday must be in YYYY-MM-DD format" });
+      }
       const birthDate = new Date(birthday);
+      if (isNaN(birthDate.getTime())) {
+        return res.status(400).json({ error: "Invalid birthday date" });
+      }
       const today = new Date();
       age = today.getFullYear() - birthDate.getFullYear();
       const monthDiff = today.getMonth() - birthDate.getMonth();
@@ -101,15 +109,15 @@ router.post("/photos", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: "type must be 'body' or 'face'" });
     }
 
+    const imgCheck = validateBase64Image(image);
+    if (!imgCheck.valid) {
+      return res.status(400).json({ error: `Invalid image: ${imgCheck.error}` });
+    }
+
     const key = `users/${req.userId}/${type}.jpg`;
     const buffer = Buffer.from(image, "base64");
 
-    await s3Client.send(new PutObjectCommand({
-      Bucket: S3_USER_BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: "image/jpeg",
-    }));
+    await storage.uploadFile(key, buffer, "image/jpeg");
 
     // Update profile with photo key
     const existing = await getProfile(req.userId) || {};
@@ -152,17 +160,8 @@ router.get("/photo/:type", requireAuth, async (req, res, next) => {
       return res.status(404).json({ error: `No ${type} photo found` });
     }
 
-    const result = await s3Client.send(new GetObjectCommand({
-      Bucket: S3_USER_BUCKET,
-      Key: photoKey,
-    }));
-
-    const chunks = [];
-    for await (const chunk of result.Body) {
-      chunks.push(chunk);
-    }
-    const base64 = Buffer.concat(chunks).toString("base64");
-
+    const base64 = await storage.downloadFileBase64(photoKey);
+    res.set("Cache-Control", "no-store");
     res.json({ image: base64 });
   } catch (error) {
     next(error);
@@ -183,9 +182,13 @@ router.post("/generate-photos", requireAuth, async (req, res, next) => {
 
     // Validate that none of the 5 images are empty/null/undefined
     for (let idx = 0; idx < 5; idx++) {
+      const label = idx < 3 ? `body photo ${idx + 1}` : `face photo ${idx - 2}`;
       if (!userImages[idx] || typeof userImages[idx] !== "string" || userImages[idx].length < 100) {
-        const label = idx < 3 ? `body photo ${idx + 1}` : `face photo ${idx - 2}`;
         return res.status(400).json({ error: `${label} is missing or invalid (image ${idx + 1} of 5)` });
+      }
+      const imgCheck = validateBase64Image(userImages[idx]);
+      if (!imgCheck.valid) {
+        return res.status(400).json({ error: `${label} invalid: ${imgCheck.error}` });
       }
     }
 
@@ -201,7 +204,7 @@ router.post("/generate-photos", requireAuth, async (req, res, next) => {
       return fs.readFileSync(filepath).toString("base64");
     });
 
-    // Store 5 original user images in S3
+    // Store 5 original user images in Cloud Storage
     const originalKeys = [];
     const bodyLabels = ["original_body_0", "original_body_1", "original_body_2"];
     const faceLabels = ["original_face_0", "original_face_1"];
@@ -210,12 +213,7 @@ router.post("/generate-photos", requireAuth, async (req, res, next) => {
     for (let i = 0; i < 5; i++) {
       const key = `users/${req.userId}/${allLabels[i]}.jpg`;
       const buffer = Buffer.from(userImages[i], "base64");
-      await s3Client.send(new PutObjectCommand({
-        Bucket: S3_USER_BUCKET,
-        Key: key,
-        Body: buffer,
-        ContentType: "image/jpeg",
-      }));
+      await storage.uploadFile(key, buffer, "image/jpeg");
       originalKeys.push(key);
       console.log(`\x1b[36m  Stored: ${key} (${(buffer.length / 1024).toFixed(0)} KB)\x1b[0m`);
     }
@@ -251,15 +249,10 @@ router.post("/generate-photos", requireAuth, async (req, res, next) => {
           console.log(`\x1b[36m  ↳ Set as identity anchor for remaining poses\x1b[0m`);
         }
 
-        // Store generated image in S3
+        // Store generated image in Cloud Storage
         const key = `users/${req.userId}/generated_pose_${i}.jpg`;
         const buffer = Buffer.from(resultBase64, "base64");
-        await s3Client.send(new PutObjectCommand({
-          Bucket: S3_USER_BUCKET,
-          Key: key,
-          Body: buffer,
-          ContentType: "image/jpeg",
-        }));
+        await storage.uploadFile(key, buffer, "image/jpeg");
         generatedKeys.push(key);
       } catch (err) {
         const elapsed = ((Date.now() - stepStart) / 1000).toFixed(1);
@@ -275,7 +268,7 @@ router.post("/generate-photos", requireAuth, async (req, res, next) => {
     console.log(`║  ✅ PROFILE GENERATION DONE — ${successCount}/3 in ${totalElapsed}s`);
     console.log(`╚══════════════════════════════════════════════════════════╝\x1b[0m`);
 
-    // Update profile in DynamoDB
+    // Update profile in Firestore
     const existing = await getProfile(req.userId) || {};
     const profileData = {
       ...existing,
@@ -323,20 +316,20 @@ router.put("/photos/original/:index", requireAuth, async (req, res, next) => {
       return res.status(400).json({ error: "image (base64) is required" });
     }
 
+    const imgCheck = validateBase64Image(image);
+    if (!imgCheck.valid) {
+      return res.status(400).json({ error: `Invalid image: ${imgCheck.error}` });
+    }
+
     const profile = await getProfile(req.userId);
     if (!profile || !profile.originalPhotoKeys || !profile.originalPhotoKeys[index]) {
       return res.status(404).json({ error: "Original photo not found at this index" });
     }
 
-    // Overwrite the existing S3 key
+    // Overwrite the existing key
     const key = profile.originalPhotoKeys[index];
     const buffer = Buffer.from(image, "base64");
-    await s3Client.send(new PutObjectCommand({
-      Bucket: S3_USER_BUCKET,
-      Key: key,
-      Body: buffer,
-      ContentType: "image/jpeg",
-    }));
+    await storage.uploadFile(key, buffer, "image/jpeg");
 
     console.log(`[profile] Replaced original photo [${index}]: ${key} (${(buffer.length / 1024).toFixed(0)} KB)`);
 
@@ -356,29 +349,21 @@ router.get("/photos/all", requireAuth, async (req, res, next) => {
       return res.json({ originals: [], generated: [] });
     }
 
-    const fetchFromS3 = async (key) => {
+    const fetchFromStorage = async (key) => {
       try {
-        const result = await s3Client.send(new GetObjectCommand({
-          Bucket: S3_USER_BUCKET,
-          Key: key,
-        }));
-        const chunks = [];
-        for await (const chunk of result.Body) {
-          chunks.push(chunk);
-        }
-        return Buffer.concat(chunks).toString("base64");
+        return await storage.downloadFileBase64(key);
       } catch (err) {
-        console.error(`[profile] Failed to fetch photo from S3: key=${key}, error=${err.message}`);
+        console.error(`[profile] Failed to fetch photo: key=${key}, error=${err.message}`);
         return null;
       }
     };
 
     const originals = profile.originalPhotoKeys
-      ? await Promise.all(profile.originalPhotoKeys.map(fetchFromS3))
+      ? await Promise.all(profile.originalPhotoKeys.map(fetchFromStorage))
       : [];
 
     const generated = profile.generatedPhotoKeys
-      ? await Promise.all(profile.generatedPhotoKeys.map(fetchFromS3))
+      ? await Promise.all(profile.generatedPhotoKeys.map(fetchFromStorage))
       : [];
 
     res.json({ originals, generated });

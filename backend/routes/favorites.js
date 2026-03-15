@@ -1,20 +1,22 @@
 const express = require("express");
 const router = express.Router();
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { requireAuth } = require("../middleware/auth");
-const { getFavorites, addFavorite, removeFavorite, isFavorite } = require("../services/dynamodb");
+const { getFavorites, addFavorite, removeFavorite, isFavorite } = require("../services/firestore");
+const storage = require("../services/storage");
 
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    ...(process.env.AWS_SESSION_TOKEN && { sessionToken: process.env.AWS_SESSION_TOKEN }),
-  },
-});
+// Validate productId/retailer format to prevent Firestore injection
+const VALID_RETAILER = /^[a-z][a-z_]{1,29}$/;
+const VALID_PRODUCT_ID = /^[A-Za-z0-9\-_]{1,100}$/;
 
-const S3_USER_BUCKET = process.env.S3_USER_BUCKET || "nova-tryonme-users";
+function validateProductParams(productId, retailer) {
+  if (productId && !VALID_PRODUCT_ID.test(productId)) {
+    return "Invalid productId format (alphanumeric, hyphens, underscores only, max 100 chars)";
+  }
+  if (retailer && !VALID_RETAILER.test(retailer)) {
+    return "Invalid retailer format";
+  }
+  return null;
+}
 
 // GET /api/favorites
 router.get("/", requireAuth, async (req, res, next) => {
@@ -22,18 +24,15 @@ router.get("/", requireAuth, async (req, res, next) => {
     const favorites = await getFavorites(req.userId);
     console.log(`[favorites] GET — ${favorites.length} favorites found for user ${req.userId}`);
 
-    // Generate presigned URLs for try-on result images
+    // Generate signed URLs for try-on result images
     const enriched = await Promise.all(favorites.map(async (fav) => {
-      console.log(`[favorites]   asin=${fav.asin} tryOnResultKey="${fav.tryOnResultKey || '(empty)'}"`);
+      console.log(`[favorites]   productId=${fav.productId} retailer=${fav.retailer} tryOnResultKey="${fav.tryOnResultKey || '(empty)'}"`);
       if (fav.tryOnResultKey) {
         try {
-          fav.tryOnResultUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-            Bucket: S3_USER_BUCKET,
-            Key: fav.tryOnResultKey,
-          }), { expiresIn: 3600 });
-          console.log(`[favorites]   → presigned URL generated OK`);
+          fav.tryOnResultUrl = await storage.getSignedReadUrl(fav.tryOnResultKey, 3600);
+          console.log(`[favorites]   → signed URL generated OK`);
         } catch (err) {
-          console.error(`[favorites]   → presigned URL FAILED:`, err.message);
+          console.error(`[favorites]   → signed URL FAILED:`, err.message);
         }
       }
       return fav;
@@ -41,7 +40,7 @@ router.get("/", requireAuth, async (req, res, next) => {
 
     // Final check: log what we're sending back
     enriched.forEach((f, i) => {
-      console.log(`[favorites]   FINAL[${i}] asin=${f.asin} hasUrl=${!!f.tryOnResultUrl} urlPreview=${f.tryOnResultUrl ? f.tryOnResultUrl.substring(0, 80) + '...' : 'NONE'}`);
+      console.log(`[favorites]   FINAL[${i}] productId=${f.productId} retailer=${f.retailer} hasUrl=${!!f.tryOnResultUrl} urlPreview=${f.tryOnResultUrl ? f.tryOnResultUrl.substring(0, 80) + '...' : 'NONE'}`);
     });
     res.json({ favorites: enriched });
   } catch (error) {
@@ -49,10 +48,10 @@ router.get("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/favorites/:asin - Check if product is favorited
-router.get("/:asin", requireAuth, async (req, res, next) => {
+// GET /api/favorites/:productId - Check if product is favorited
+router.get("/:productId", requireAuth, async (req, res, next) => {
   try {
-    const favorited = await isFavorite(req.userId, req.params.asin);
+    const favorited = await isFavorite(req.userId, req.params.productId);
     res.json({ favorited });
   } catch (error) {
     next(error);
@@ -62,32 +61,37 @@ router.get("/:asin", requireAuth, async (req, res, next) => {
 // POST /api/favorites
 router.post("/", requireAuth, async (req, res, next) => {
   try {
-    const { asin, productTitle, productImage, category, garmentClass, tryOnResultImage, outfitId } = req.body;
+    const { productTitle, productImage, productUrl, category, garmentClass, tryOnResultImage, outfitId } = req.body;
+    // Backward compat: accept asin if productId not provided
+    const productId = req.body.productId || req.body.asin;
+    const retailer = req.body.retailer || "amazon";
 
-    console.log(`[favorites] POST — asin=${asin}, hasProductImage=${!!productImage}, hasTryOnResultImage=${!!tryOnResultImage}, tryOnImageLength=${tryOnResultImage ? tryOnResultImage.length : 0}`);
+    console.log(`[favorites] POST — productId=${productId}, retailer=${retailer}, hasProductImage=${!!productImage}, hasTryOnResultImage=${!!tryOnResultImage}, tryOnImageLength=${tryOnResultImage ? tryOnResultImage.length : 0}`);
 
-    if (!asin) {
-      return res.status(400).json({ error: "asin is required" });
+    if (!productId) {
+      return res.status(400).json({ error: "productId is required" });
+    }
+
+    const validationError = validateProductParams(productId, retailer);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
     let tryOnResultKey = "";
 
-    // Save try-on result image to S3 if provided
+    // Save try-on result image to Cloud Storage if provided
     if (tryOnResultImage) {
-      tryOnResultKey = `users/${req.userId}/favorites/${asin}.jpg`;
+      tryOnResultKey = `users/${req.userId}/favorites/${retailer}_${productId}.jpg`;
       const buffer = Buffer.from(tryOnResultImage, "base64");
-      await s3Client.send(new PutObjectCommand({
-        Bucket: S3_USER_BUCKET,
-        Key: tryOnResultKey,
-        Body: buffer,
-        ContentType: "image/jpeg",
-      }));
+      await storage.uploadFile(tryOnResultKey, buffer, "image/jpeg");
     }
 
     const result = await addFavorite(req.userId, {
-      asin,
+      productId,
+      retailer,
       productTitle: productTitle || "",
       productImage: productImage || "",
+      productUrl: productUrl || "",
       category: category || "",
       garmentClass: garmentClass || "",
       tryOnResultKey,
@@ -100,20 +104,15 @@ router.post("/", requireAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/favorites/:asin/image - Return the try-on result image as base64 from S3
-router.get("/:asin/image", requireAuth, async (req, res, next) => {
+// GET /api/favorites/:productId/image - Return the try-on result image as base64
+router.get("/:productId/image", requireAuth, async (req, res, next) => {
   try {
-    const key = `users/${req.userId}/favorites/${req.params.asin}.jpg`;
+    const retailer = req.query.retailer || "amazon";
+    const key = `users/${req.userId}/favorites/${retailer}_${req.params.productId}.jpg`;
     console.log(`[favorites] GET IMAGE — key=${key}`);
-    const command = new GetObjectCommand({ Bucket: S3_USER_BUCKET, Key: key });
-    const s3Response = await s3Client.send(command);
-    const chunks = [];
-    for await (const chunk of s3Response.Body) {
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
-    const base64 = buffer.toString("base64");
-    console.log(`[favorites] GET IMAGE OK — ${buffer.length} bytes`);
+    const base64 = await storage.downloadFileBase64(key);
+    console.log(`[favorites] GET IMAGE OK`);
+    res.set("Cache-Control", "no-store");
     res.json({ image: base64 });
   } catch (error) {
     console.error(`[favorites] GET IMAGE FAILED:`, error.message);
@@ -121,10 +120,10 @@ router.get("/:asin/image", requireAuth, async (req, res, next) => {
   }
 });
 
-// DELETE /api/favorites/:asin
-router.delete("/:asin", requireAuth, async (req, res, next) => {
+// DELETE /api/favorites/:productId
+router.delete("/:productId", requireAuth, async (req, res, next) => {
   try {
-    const result = await removeFavorite(req.userId, req.params.asin);
+    const result = await removeFavorite(req.userId, req.params.productId);
     res.json(result);
   } catch (error) {
     next(error);

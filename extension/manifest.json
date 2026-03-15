@@ -1,16 +1,26 @@
 {
   "manifest_version": 3,
-  "name": "SuperNova TryOnMe - Virtual Try-On for Amazon",
-  "version": "1.0.0",
-  "description": "Virtual try-on experience for clothing, shoes, and cosmetics on Amazon product pages powered by Amazon Nova.",
+  "name": "Gemini TryOnMe Everything - Universal Virtual Try-On",
+  "version": "1.1.0",
+  "description": "Virtual try-on experience for clothing, shoes, cosmetics, and accessories on Amazon, SHEIN, Temu, and more — powered by Google Gemini.",
   "permissions": [
     "storage",
     "activeTab",
-    "sidePanel"
+    "sidePanel",
+    "contextMenus",
+    "scripting"
   ],
   "host_permissions": [
     "https://www.amazon.com/*",
-    "https://www.amazon.co.uk/*"
+    "https://www.amazon.co.uk/*",
+    "https://*.shein.com/*",
+    "https://www.temu.com/*",
+    "https://temu.com/*",
+    "https://img.ltwebstatic.com/*",
+    "https://img.kwcdn.com/*",
+    "https://shopping.google.com/*",
+    "https://www.google.com/*",
+    "https://geminitryonme-backend-81189935460.us-central1.run.app/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -26,6 +36,7 @@
         "https://www.amazon.co.uk/gp/product/*"
       ],
       "js": [
+        "utils/scraper-registry.js",
         "utils/amazon-scraper.js",
         "utils/image-utils.js",
         "utils/api-client.js",
@@ -33,6 +44,57 @@
       ],
       "css": [
         "styles/content.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.shein.com/*-p-*.html*",
+        "https://*.shein.com/product-*"
+      ],
+      "js": [
+        "utils/scraper-registry.js",
+        "utils/shein-scraper.js",
+        "utils/image-utils.js",
+        "utils/api-client.js",
+        "content.js"
+      ],
+      "css": [
+        "styles/content.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.temu.com/*-g-*.html*",
+        "https://www.temu.com/goods-detail*"
+      ],
+      "js": [
+        "utils/scraper-registry.js",
+        "utils/temu-scraper.js",
+        "utils/image-utils.js",
+        "utils/api-client.js",
+        "content.js"
+      ],
+      "css": [
+        "styles/content.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://shopping.google.com/*",
+        "https://www.google.com/search*"
+      ],
+      "js": [
+        "utils/google-shopping-scraper.js",
+        "utils/image-utils.js",
+        "utils/api-client.js",
+        "content-gshopping.js"
+      ],
+      "css": [
+        "styles/content.css",
+        "styles/gshopping.css"
       ],
       "run_at": "document_idle"
     }
@@ -60,9 +122,18 @@
         "smart-search/results.js",
         "outfit-builder/wardrobe.html",
         "outfit-builder/wardrobe.css",
-        "outfit-builder/wardrobe.js"
+        "outfit-builder/wardrobe.js",
+        "popup/audio-worklet-processor.js"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "https://www.amazon.com/*",
+        "https://www.amazon.co.uk/*",
+        "https://*.shein.com/*",
+        "https://www.temu.com/*",
+        "https://temu.com/*",
+        "https://shopping.google.com/*",
+        "https://www.google.com/*"
+      ]
     }
   ]
 }

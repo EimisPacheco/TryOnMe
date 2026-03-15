@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>SuperNova TryOnMe - AI for Bharat Hackathon</title>
+<title>Gemini TryOnMe Everything - Google DeepMind Gemini Hackathon</title>
 <style>
   @page { size: landscape; margin: 0; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -24,7 +24,7 @@
   .slide-orange { background: linear-gradient(135deg, #FF6600 0%, #FF9900 100%); }
   .slide-white { background: #fff; color: #0f1111; }
   .slide-gradient { background: linear-gradient(135deg, #16213e 0%, #0f3460 50%, #533483 100%); }
-  .slide-aws { background: linear-gradient(135deg, #232f3e 0%, #37475a 100%); }
+  .slide-gcp { background: linear-gradient(135deg, #232f3e 0%, #37475a 100%); }
 
   /* Decorative elements */
   .slide::after {
@@ -75,16 +75,16 @@
   .feature-card h3 { font-size: 18px; margin-bottom: 8px; }
   .feature-card p { font-size: 14px; opacity: 0.75; line-height: 1.5; }
 
-  .aws-card {
+  .gcp-card {
     background: rgba(255,153,0,0.08);
     border: 1px solid rgba(255,153,0,0.2);
     border-radius: 12px;
     padding: 20px;
     text-align: center;
   }
-  .aws-card .icon { font-size: 32px; margin-bottom: 8px; }
-  .aws-card h3 { font-size: 15px; color: #FF9900; margin-bottom: 4px; }
-  .aws-card p { font-size: 12px; opacity: 0.7; }
+  .gcp-card .icon { font-size: 32px; margin-bottom: 8px; }
+  .gcp-card h3 { font-size: 15px; color: #FF9900; margin-bottom: 4px; }
+  .gcp-card p { font-size: 12px; opacity: 0.7; }
 
   /* Lists */
   .feature-list { list-style: none; }
@@ -211,18 +211,18 @@
   <div class="brand-bar"></div>
   <div class="center">
     <div style="font-size:72px; margin-bottom:16px;">&#10024;</div>
-    <h1>SuperNova TryOnMe</h1>
-    <p class="subtitle" style="font-size:28px; margin-top:20px;">AI-Powered Virtual Try-On for Amazon Shopping</p>
+    <h1>Gemini TryOnMe Everything</h1>
+    <p class="subtitle" style="font-size:28px; margin-top:20px;">AI-Powered Universal Virtual Try-On</p>
     <p style="font-size:18px; opacity:0.7; margin-top:12px;">A Chrome Extension that lets you see clothes on YOUR body before you buy</p>
     <div style="margin-top:36px; display:flex; gap:12px; flex-wrap:wrap; justify-content:center;">
-      <span class="tag tag-orange">Amazon Nova 2 Lite</span>
-      <span class="tag tag-orange">Amazon Nova Canvas</span>
-      <span class="tag tag-orange">Amazon Nova Act</span>
-      <span class="tag tag-orange">AWS Bedrock</span>
       <span class="tag tag-green">Gemini 2.5 Flash</span>
+      <span class="tag tag-green">Gemini 3 Pro Image</span>
       <span class="tag tag-purple">Grok xAI Video</span>
+      <span class="tag tag-green">Firebase Auth</span>
+      <span class="tag tag-green">Cloud Storage</span>
+      <span class="tag tag-green">Firestore</span>
     </div>
-    <p style="margin-top:40px; font-size:16px; opacity:0.5;">AI for Bharat Hackathon 2025</p>
+    <p style="margin-top:40px; font-size:16px; opacity:0.5;">Google DeepMind Gemini Hackathon 2025</p>
   </div>
   <div class="slide-number">1</div>
 </div>
@@ -276,7 +276,7 @@
     <div>
       <div class="feature-card" style="margin-bottom:16px; border-left:3px solid #CE93D8;">
         <h3 style="font-size:16px; color:#CE93D8;">AI Agent for Natural Language Shopping</h3>
-        <p>Nova Act doesn't just search keywords &mdash; it <strong>browses Amazon like a human</strong>, navigating pages, applying filters, scrolling results, and extracting product data. This agentic behavior requires AI that understands web interfaces and user intent.</p>
+        <p>AI Smart Search doesn't just search keywords &mdash; it <strong>browses products like a human</strong>, navigating pages, applying filters, scrolling results, and extracting product data. This agentic behavior requires AI that understands web interfaces and user intent.</p>
       </div>
       <div class="feature-card" style="margin-bottom:16px; border-left:3px solid #FF9900;">
         <h3 style="font-size:16px; color:#FF9900;">Identity-Preserving Profile Generation</h3>
@@ -407,7 +407,7 @@
     <div class="feature-card">
       <div class="icon">&#128269;</div>
       <h3>AI Smart Search</h3>
-      <p>Natural language product discovery powered by Amazon Nova Act. An AI agent browses Amazon for you, applies quality filters, and returns curated results.</p>
+      <p>Natural language product discovery powered by AI. An AI agent browses products for you, applies quality filters, and returns curated results.</p>
     </div>
     <div class="feature-card">
       <div class="icon">&#128090;</div>
@@ -422,7 +422,7 @@
     <div class="feature-card">
       <div class="icon">&#10084;</div>
       <h3>Favorites & Profiles</h3>
-      <p>Save your best looks. Full user authentication with AWS Cognito, AI-generated profile poses, cloud storage of photos and try-on history.</p>
+      <p>Save your best looks. Full user authentication with Firebase Auth, AI-generated profile poses, cloud storage of photos and try-on history.</p>
     </div>
   </div>
   <div class="slide-number">6</div>
@@ -438,7 +438,7 @@
       <div class="flow-step" style="background:rgba(255,153,0,0.2); min-width:200px;">
         <div style="font-size:28px;">&#128100;</div>
         <strong>1. Create Account</strong><br>
-        <small style="opacity:0.6;">Sign up with email<br>Verified via AWS Cognito</small>
+        <small style="opacity:0.6;">Sign up with email<br>Verified via Firebase Auth</small>
       </div>
       <div class="flow-arrow">&#8594;</div>
       <div class="flow-step" style="background:rgba(255,153,0,0.2); min-width:200px;">
@@ -505,28 +505,28 @@
       </ul>
       <div style="margin-top:8px;">
         <span class="tag tag-green" style="font-size:11px;">Gemini 2.5 Flash</span>
-        <span class="tag tag-orange" style="font-size:11px;">Nova 2 Lite</span>
+        <span class="tag tag-green" style="font-size:11px;">Gemini Classifier</span>
       </div>
     </div>
     <div class="mode-box">
       <div class="mode-tag">MODE 2</div>
       <h3>&#128270; AI Smart Search</h3>
-      <p>Type what you want: <em>"black dresses for women"</em>. An AI agent browses Amazon, applies 4+ star filters, and returns 20+ curated products with "Try On" on each.</p>
+      <p>Type what you want: <em>"black dresses for women"</em>. An AI agent browses products, applies 4+ star filters, and returns 20+ curated products with "Try On" on each.</p>
       <ul class="feature-list" style="margin-top:12px;">
         <li style="font-size:14px;">Natural language queries</li>
         <li style="font-size:14px;">AI agent applies quality filters</li>
         <li style="font-size:14px;">Product grid with try-on buttons</li>
-        <li style="font-size:14px;">Buy directly on Amazon</li>
+        <li style="font-size:14px;">Buy directly on retailer site</li>
       </ul>
       <div style="margin-top:8px;">
-        <span class="tag tag-orange" style="font-size:11px;">Amazon Nova Act</span>
+        <span class="tag tag-green" style="font-size:11px;">Gemini AI Agent</span>
         <span class="tag tag-green" style="font-size:11px;">Gemini 2.5 Flash</span>
       </div>
     </div>
     <div class="mode-box">
       <div class="mode-tag">MODE 3</div>
       <h3>&#128090; Outfit Builder</h3>
-      <p>Build a complete outfit. Describe a <strong>top, bottom & shoes</strong> separately. AI searches Amazon for each, presents a virtual wardrobe, and lets you try the full outfit together.</p>
+      <p>Build a complete outfit. Describe a <strong>top, bottom & shoes</strong> separately. AI searches for each, presents a virtual wardrobe, and lets you try the full outfit together.</p>
       <ul class="feature-list" style="margin-top:12px;">
         <li style="font-size:14px;">3 parallel product searches</li>
         <li style="font-size:14px;">Visual wardrobe with hangers</li>
@@ -534,7 +534,7 @@
         <li style="font-size:14px;">Try entire outfit in one shot</li>
       </ul>
       <div style="margin-top:8px;">
-        <span class="tag tag-orange" style="font-size:11px;">Nova Act</span>
+        <span class="tag tag-green" style="font-size:11px;">Gemini AI Agent</span>
         <span class="tag tag-green" style="font-size:11px;">Gemini 2.5 Flash</span>
       </div>
     </div>
@@ -561,23 +561,23 @@
     <div>
       <h3 style="color:#FF9900; font-size:18px; margin-bottom:16px;">AI Models</h3>
       <div class="tech-row">
-        <div class="tech-icon tech-icon-orange">&#128064;</div>
+        <div class="tech-icon tech-icon-green">&#128064;</div>
         <div class="tech-desc">
-          <h4 style="color:#FF9900;">Amazon Nova 2 Lite <span class="tag tag-orange" style="font-size:10px; padding:2px 8px;">Bedrock</span></h4>
-          <p>Fast, low-cost classification. Detects garment type (upper/lower/full/footwear), identifies person vs product images, classifies current outfit for conflict resolution. Chosen for speed - runs 3 classification calls in the pipeline.</p>
+          <h4 style="color:#66BB6A;">Gemini Flash — Classifier</h4>
+          <p>Fast, low-cost classification. Detects garment type (upper/lower/full/footwear), identifies person vs product images, classifies current outfit for conflict resolution. Chosen for speed — runs 3 classification calls in the pipeline.</p>
         </div>
       </div>
       <div class="tech-row">
-        <div class="tech-icon tech-icon-orange">&#127912;</div>
+        <div class="tech-icon tech-icon-green">&#127912;</div>
         <div class="tech-desc">
-          <h4 style="color:#FF9900;">Amazon Nova Canvas <span class="tag tag-orange" style="font-size:10px; padding:2px 8px;">Bedrock</span></h4>
-          <p>Specialized inpainting model. Powers cosmetics try-on (lipstick, eyeshadow, blush on user's face) and background removal. Chosen for its precise region-based editing capabilities.</p>
+          <h4 style="color:#66BB6A;">Gemini Flash — Image Processor</h4>
+          <p>Specialized image editing. Powers cosmetics try-on (lipstick, eyeshadow, blush on user's face), background removal, and accessory overlay. Chosen for its precise region-based editing capabilities.</p>
         </div>
       </div>
       <div class="tech-row">
         <div class="tech-icon tech-icon-green">&#10024;</div>
         <div class="tech-desc">
-          <h4 style="color:#66BB6A;">Google Gemini 2.5 Flash Image</h4>
+          <h4 style="color:#66BB6A;">Gemini 2.5 Flash Image</h4>
           <p>Core try-on engine. Multi-image input (user photo + garment) with intelligent prompt engineering. Also generates 3 professional AI profile poses from 5 user photos. Chosen for best-in-class image editing with identity preservation.</p>
         </div>
       </div>
@@ -588,42 +588,35 @@
           <p>Image-to-video generation. Animates try-on results with natural runway-style movement. 6-second 720p portrait videos. Chosen for high-quality fashion animation output.</p>
         </div>
       </div>
-      <div class="tech-row">
-        <div class="tech-icon tech-icon-orange">&#129302;</div>
-        <div class="tech-desc">
-          <h4 style="color:#FF9900;">Amazon Nova Act</h4>
-          <p>AI browser agent. Navigates Amazon search, applies filters (4+ stars), extracts product data (ASIN, image, price). Powers Smart Search and Outfit Builder product discovery.</p>
-        </div>
-      </div>
     </div>
     <div>
-      <h3 style="color:#4FC3F7; font-size:18px; margin-bottom:16px;">AWS Infrastructure</h3>
+      <h3 style="color:#4FC3F7; font-size:18px; margin-bottom:16px;">Google Cloud Infrastructure</h3>
       <div class="tech-row">
         <div class="tech-icon tech-icon-blue">&#128272;</div>
         <div class="tech-desc">
-          <h4 style="color:#4FC3F7;">Amazon Cognito</h4>
-          <p>Full user authentication: signup, email verification, login, JWT token management with automatic refresh. Chosen for seamless integration with AWS ecosystem and secure token-based auth.</p>
+          <h4 style="color:#4FC3F7;">Firebase Auth</h4>
+          <p>Full user authentication: signup, email verification, login, JWT token management with automatic refresh. Chosen for seamless integration with Google Cloud ecosystem and secure token-based auth.</p>
         </div>
       </div>
       <div class="tech-row">
         <div class="tech-icon tech-icon-blue">&#128230;</div>
         <div class="tech-desc">
-          <h4 style="color:#4FC3F7;">Amazon S3</h4>
-          <p>Stores user photos (body + face), AI-generated profile poses, try-on result images, and favorite looks. Presigned URLs for secure delivery. Two buckets: users and videos.</p>
+          <h4 style="color:#4FC3F7;">Google Cloud Storage</h4>
+          <p>Stores user photos (body + face), AI-generated profile poses, try-on result images, and favorite looks. Signed URLs for secure delivery.</p>
         </div>
       </div>
       <div class="tech-row">
         <div class="tech-icon tech-icon-blue">&#128451;</div>
         <div class="tech-desc">
-          <h4 style="color:#4FC3F7;">Amazon DynamoDB</h4>
-          <p>Two tables: UserProfiles (personal info, photo S3 keys, generated poses) and Favorites (saved try-on results indexed by ASIN). Chosen for serverless scale and low latency.</p>
+          <h4 style="color:#4FC3F7;">Cloud Firestore</h4>
+          <p>User profiles (personal info, photo keys, generated poses), favorites (saved try-on results indexed by productId), and video metadata. Chosen for real-time sync and serverless scale.</p>
         </div>
       </div>
       <div class="tech-row">
         <div class="tech-icon tech-icon-blue">&#9889;</div>
         <div class="tech-desc">
-          <h4 style="color:#4FC3F7;">AWS Bedrock</h4>
-          <p>Unified API for all Amazon Nova models (Lite, Canvas). Provides InvokeModel for sync calls and StartAsyncInvoke for video generation. Single SDK, multiple AI capabilities.</p>
+          <h4 style="color:#4FC3F7;">Gmail SMTP (Nodemailer)</h4>
+          <p>Email sharing of try-on results. Sends branded HTML emails with images embedded inline. Rate-limited to prevent abuse. Chosen for zero-cost transactional email.</p>
         </div>
       </div>
       <h3 style="color:#66BB6A; font-size:18px; margin-top:16px; margin-bottom:12px;">Application Stack</h3>
@@ -649,7 +642,7 @@
       <h3 style="color:#FF9900; margin-bottom:16px;">Pipeline Steps</h3>
       <div style="display:flex; flex-direction:column; gap:10px;">
         <div class="flow-step" style="text-align:left;">
-          <strong>1. Product Analysis</strong> <span class="tag tag-orange" style="font-size:11px;">Nova 2 Lite</span><br>
+          <strong>1. Product Analysis</strong> <span class="tag tag-green" style="font-size:11px;">Gemini Flash</span><br>
           <small style="opacity:0.7;">Classifies garment type, color, category. Detects if image has a model wearing the garment.</small>
         </div>
         <div class="flow-step" style="text-align:left;">
@@ -657,7 +650,7 @@
           <small style="opacity:0.7;">If product image has a person, extracts the garment into a clean product shot.</small>
         </div>
         <div class="flow-step" style="text-align:left;">
-          <strong>3. Outfit Classification</strong> <span class="tag tag-orange" style="font-size:11px;">Nova 2 Lite</span><br>
+          <strong>3. Outfit Classification</strong> <span class="tag tag-green" style="font-size:11px;">Gemini Flash</span><br>
           <small style="opacity:0.7;">Analyzes what the user is currently wearing to detect outfit conflicts.</small>
         </div>
         <div class="flow-step" style="text-align:left;">
@@ -752,7 +745,7 @@
     <div class="feature-card" style="text-align:center;">
       <div class="big-number" style="font-size:48px;">&#128270;</div>
       <h3>AI Discovery</h3>
-      <p>Nova Act browses Amazon like a personal shopping assistant. Describe what you want in plain language, get curated results.</p>
+      <p>AI agent browses products like a personal shopping assistant. Describe what you want in plain language, get curated results.</p>
     </div>
     <div class="feature-card" style="text-align:center;">
       <div class="big-number" style="font-size:48px;">&#128090;</div>
@@ -780,7 +773,7 @@
       <div class="flow-step" style="background:rgba(255,153,0,0.2); min-width:170px;">
         <div style="font-size:24px;">&#128100;</div>
         <strong>1. Sign Up</strong><br>
-        <small style="opacity:0.6;">Create account via Cognito<br>Upload 5 photos</small>
+        <small style="opacity:0.6;">Create account via Firebase<br>Upload 5 photos</small>
       </div>
       <div class="flow-arrow">&#8594;</div>
       <div class="flow-step" style="background:rgba(255,153,0,0.2); min-width:170px;">
@@ -812,7 +805,7 @@
         <div class="flow-step" style="background:rgba(79,195,247,0.15); border-color:rgba(79,195,247,0.3);">
           <div style="font-size:24px;">&#128270;</div>
           <strong>Alt: Smart Search</strong><br>
-          <small style="opacity:0.6;">"Black dresses for women"<br>Nova Act browses Amazon<br>Try on any result</small>
+          <small style="opacity:0.6;">"Black dresses for women"<br>AI agent browses products<br>Try on any result</small>
         </div>
       </div>
       <div style="text-align:center;">
@@ -862,11 +855,11 @@
 <div class="slide screenshot-slide slide-dark">
   <div class="brand-bar"></div>
   <h2>App Screenshots: <span class="highlight">AI Smart Search</span></h2>
-  <p style="font-size:14px; opacity:0.6; margin-bottom:16px;">Nova Act AI agent browses Amazon in real-time, applies quality filters, and returns a curated product grid. Every product has a "Try On" button for instant virtual try-on.</p>
+  <p style="font-size:14px; opacity:0.6; margin-bottom:16px;">AI agent browses products in real-time, applies quality filters, and returns a curated product grid. Every product has a "Try On" button for instant virtual try-on.</p>
   <div style="flex:1; display:flex; gap:24px; align-items:center; justify-content:center;">
     <div style="text-align:center;">
       <img src="app-images/Searching with Nova Act.jpg" style="width:480px; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); margin-bottom:8px;" />
-      <p style="font-size:12px; opacity:0.5;">Searching with Nova Act agent...</p>
+      <p style="font-size:12px; opacity:0.5;">Searching with AI agent...</p>
     </div>
     <div style="text-align:center;">
       <img src="app-images/SuperNova TryOnMe - Smart Search Result.jpg" style="width:480px; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1); margin-bottom:8px;" />
@@ -891,7 +884,7 @@
 <div class="slide screenshot-slide slide-dark">
   <div class="brand-bar"></div>
   <h2>App Screenshots: <span class="highlight">My Favorites</span></h2>
-  <p style="font-size:14px; opacity:0.6; margin-bottom:16px;">Save your best try-on looks to revisit later. Each favorite stores the try-on result image, product info, and date. All data persisted in DynamoDB with images in S3.</p>
+  <p style="font-size:14px; opacity:0.6; margin-bottom:16px;">Save your best try-on looks to revisit later. Each favorite stores the try-on result image, product info, and date. All data persisted in Firestore with images in Cloud Storage.</p>
   <div style="flex:1; display:flex; align-items:center; justify-content:center;">
     <img src="app-images/SuperNova TryOnMe - Side Panel My Favorites.jpg" style="height:520px; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.1);" />
   </div>
@@ -902,24 +895,22 @@
 <div class="slide slide-orange">
   <div class="center">
     <div style="font-size:72px; margin-bottom:16px;">&#10024;</div>
-    <h1 style="font-size:56px;">SuperNova TryOnMe</h1>
+    <h1 style="font-size:56px;">Gemini TryOnMe Everything</h1>
     <p style="font-size:28px; margin-top:16px; opacity:0.9;">The Future of Online Shopping is Here</p>
     <div style="margin-top:36px; font-size:18px; opacity:0.85; line-height:2;">
       <div>Virtual Try-On &bull; AI Smart Search &bull; Outfit Builder &bull; Video Animation &bull; Cosmetics</div>
-      <div style="margin-top:8px;">Powered by <strong>Amazon Nova AI</strong> &bull; Gemini &bull; Grok xAI &bull; AWS</div>
+      <div style="margin-top:8px;">Powered by <strong>Google Gemini</strong> &bull; Grok xAI &bull; Google Cloud</div>
     </div>
     <div style="margin-top:36px; display:flex; gap:12px; flex-wrap:wrap; justify-content:center;">
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Nova 2 Lite</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Nova Canvas</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Nova Act</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Grok xAI</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Bedrock</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Cognito</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">DynamoDB</span>
-      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">S3</span>
       <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Gemini 2.5 Flash</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Gemini 3 Pro Image</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Grok xAI</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Firebase Auth</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Cloud Storage</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Firestore</span>
+      <span class="tag" style="background:rgba(0,0,0,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3);">Gmail SMTP</span>
     </div>
-    <p style="margin-top:36px; font-size:16px; opacity:0.7;">Thank you! &bull; AI for Bharat Hackathon 2025</p>
+    <p style="margin-top:36px; font-size:16px; opacity:0.7;">Thank you! &bull; Google DeepMind Gemini Hackathon 2025</p>
   </div>
   <div class="slide-number" style="color:rgba(255,255,255,0.4);">20</div>
 </div>

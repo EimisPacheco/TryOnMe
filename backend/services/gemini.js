@@ -1,8 +1,33 @@
 const { GoogleGenAI } = require("@google/genai");
+const { withCircuitBreaker } = require("./circuitBreaker");
+const { withTimeout } = require("./withTimeout");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS || "120000", 10); // 2 minutes default
 
 let genaiClient = null;
+
+/**
+ * Detect image format from base64 string using magic bytes.
+ */
+function detectImageFormat(base64String) {
+  try {
+    const header = Buffer.from(base64String.slice(0, 24), "base64");
+    if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47) return "png";
+    if (header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) return "jpeg";
+    if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+        header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50) return "webp";
+    if (header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x38) return "gif";
+  } catch {}
+  if (base64String.startsWith("iVBOR")) return "png";
+  if (base64String.startsWith("/9j/")) return "jpeg";
+  if (base64String.startsWith("UklG")) return "webp";
+  return "jpeg";
+}
+
+function getMimeType(base64) {
+  return `image/${detectImageFormat(base64)}`;
+}
 
 function getClient() {
   if (!genaiClient) {
@@ -126,8 +151,8 @@ async function virtualTryOn(sourceImageBase64, referenceImageBase64, garmentClas
   console.log(`\x1b[33m  │ ${prompt}\x1b[0m`);
   console.log(`\x1b[34m  └─── CALLING GEMINI API... ───┘\x1b[0m`);
 
-  const response = await client.models.generateContent({
-    model: "gemini-2.5-flash-image",
+  const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
+    model: "gemini-3-pro-image-preview",
     contents: [
       {
         role: "user",
@@ -135,14 +160,14 @@ async function virtualTryOn(sourceImageBase64, referenceImageBase64, garmentClas
           { text: "This is the person. Keep this EXACT person — same face, skin, body, hair:" },
           {
             inlineData: {
-              mimeType: "image/jpeg",
+              mimeType: getMimeType(sourceImageBase64),
               data: sourceImageBase64,
             },
           },
           { text: "This is the garment to put on the person above:" },
           {
             inlineData: {
-              mimeType: "image/jpeg",
+              mimeType: getMimeType(referenceImageBase64),
               data: referenceImageBase64,
             },
           },
@@ -154,7 +179,7 @@ async function virtualTryOn(sourceImageBase64, referenceImageBase64, garmentClas
       responseModalities: ["TEXT", "IMAGE"],
       systemInstruction: "You are a virtual clothing try-on system. You will receive exactly 2 images: IMAGE 1 is a real person (the customer), IMAGE 2 is a garment. Your ONLY job is to produce a single photo-realistic image of the EXACT same person from IMAGE 1 wearing the garment from IMAGE 2. IDENTITY RULE: The output person must have the IDENTICAL face, facial bone structure, nose, eyes, eyebrows, lips, skin color, hair color, hair style, and body proportions as IMAGE 1. Do NOT replace them with a model, do NOT alter their facial features, do NOT change their skin tone. If you cannot preserve the identity perfectly, try harder — identity fidelity is the #1 priority, above all else.",
     },
-  });
+  }), GEMINI_TIMEOUT_MS, "virtualTryOn"));
 
   // Extract the image from the response
   const candidates = response.candidates || [];
@@ -195,8 +220,8 @@ CRITICAL RULES:
 - The garment should fill most of the frame
 - Photorealistic result. Output only the resulting image.`;
 
-  const response = await client.models.generateContent({
-    model: "gemini-2.5-flash-image",
+  const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
+    model: "gemini-3-pro-image-preview",
     contents: [
       {
         role: "user",
@@ -204,7 +229,7 @@ CRITICAL RULES:
           { text: prompt },
           {
             inlineData: {
-              mimeType: "image/jpeg",
+              mimeType: getMimeType(imageBase64),
               data: imageBase64,
             },
           },
@@ -214,7 +239,7 @@ CRITICAL RULES:
     config: {
       responseModalities: ["TEXT", "IMAGE"],
     },
-  });
+  }), GEMINI_TIMEOUT_MS, "extractGarment"));
 
   const candidates = response.candidates || [];
   if (!candidates.length) {
@@ -283,21 +308,21 @@ OUTPUT REQUIREMENTS:
   const contents = [
     { text: prompt },
     { text: "USER reference photo 1 (full body — study body proportions, skin tone, and hair):" },
-    { inlineData: { mimeType: "image/jpeg", data: userImages[0] } },
+    { inlineData: { mimeType: getMimeType(userImages[0]), data: userImages[0] } },
     { text: "USER reference photo 2 (full body — same person, another angle, study body proportions, skin tone, and hair):" },
-    { inlineData: { mimeType: "image/jpeg", data: userImages[1] } },
+    { inlineData: { mimeType: getMimeType(userImages[1]), data: userImages[1] } },
     { text: "USER reference photo 3 (full body — same person, another angle, study body proportions, skin tone, and hair):" },
-    { inlineData: { mimeType: "image/jpeg", data: userImages[2] } },
+    { inlineData: { mimeType: getMimeType(userImages[2]), data: userImages[2] } },
     { text: "USER reference photo 4 (FACE CLOSE-UP — study this face carefully, you must reproduce it exactly):" },
-    { inlineData: { mimeType: "image/jpeg", data: userImages[3] } },
+    { inlineData: { mimeType: getMimeType(userImages[3]), data: userImages[3] } },
     { text: "USER reference photo 5 (FACE CLOSE-UP — another angle of the same face, memorize every detail):" },
-    { inlineData: { mimeType: "image/jpeg", data: userImages[4] } },
+    { inlineData: { mimeType: getMimeType(userImages[4]), data: userImages[4] } },
   ];
 
   if (anchorImageBase64) {
     contents.push(
       { text: "ANCHOR IMAGE (IDENTITY ONLY — copy the face, skin tone, and hair from this image, but do NOT copy the pose. The pose must come from the MANNEQUIN image below):" },
-      { inlineData: { mimeType: "image/jpeg", data: anchorImageBase64 } },
+      { inlineData: { mimeType: getMimeType(anchorImageBase64), data: anchorImageBase64 } },
     );
   }
 
@@ -306,14 +331,14 @@ OUTPUT REQUIREMENTS:
     { inlineData: { mimeType: poseTemplateMime, data: poseTemplateBase64 } },
   );
 
-  const response = await client.models.generateContent({
+  const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
     model: "gemini-3-pro-image-preview",
     contents: contents,
     config: {
       responseModalities: ["TEXT", "IMAGE"],
       imageConfig: { aspectRatio: "3:4" },
     },
-  });
+  }), GEMINI_TIMEOUT_MS, "generateProfilePhoto"));
 
   const candidates = response.candidates || [];
   if (!candidates.length) {
@@ -378,25 +403,25 @@ Generate a single photorealistic image of the customer wearing ALL these garment
   // 1. Garment images first
   garments.forEach((g) => {
     parts.push({ text: `GARMENT — ${g.label} (clothing item only, NOT the person to use):` });
-    parts.push({ inlineData: { mimeType: "image/jpeg", data: g.imageBase64 } });
+    parts.push({ inlineData: { mimeType: getMimeType(g.imageBase64), data: g.imageBase64 } });
   });
 
   // 2. Face reference photos
   faceReferenceImages.forEach((faceImg, i) => {
     parts.push({ text: `THE CUSTOMER'S FACE (reference ${i + 1}) — this is who the output must look like:` });
-    parts.push({ inlineData: { mimeType: "image/jpeg", data: faceImg } });
+    parts.push({ inlineData: { mimeType: getMimeType(faceImg), data: faceImg } });
   });
 
   // 3. Person body photo (last image, closest to prompt)
   parts.push({ text: "THE CUSTOMER — this is the person you must reproduce EXACTLY. Same face, same skin, same body, same hair. Dress this person in the garments above:" });
-  parts.push({ inlineData: { mimeType: "image/jpeg", data: sourceImageBase64 } });
+  parts.push({ inlineData: { mimeType: getMimeType(sourceImageBase64), data: sourceImageBase64 } });
 
   // 4. Prompt last
   parts.push({ text: prompt });
 
   console.log(`\x1b[34m  └─── CALLING GEMINI API (single outfit call)... ───┘\x1b[0m`);
 
-  const response = await client.models.generateContent({
+  const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
     model: "gemini-3-pro-image-preview",
     contents: [{ role: "user", parts }],
     config: {
@@ -405,7 +430,7 @@ Generate a single photorealistic image of the customer wearing ALL these garment
       personGeneration: "ALLOW_ADULT",
       systemInstruction: "You are a virtual clothing try-on system. Preserve the identity of the person in the reference images with absolute fidelity — same face geometry, skin tone, ethnicity, hair, and body. Do NOT substitute a different person or model.",
     },
-  });
+  }), GEMINI_TIMEOUT_MS, "virtualTryOnOutfit"));
 
   const candidates = response.candidates || [];
   if (!candidates.length) {

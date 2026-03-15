@@ -1,5 +1,5 @@
 /**
- * NovaTryOnMe - Smart Search Results Page
+ * GeminiTryOnMe - Smart Search Results Page
  *
  * Receives search query via URL params, calls backend via background.js,
  * displays product grid, and enables virtual try-on for each product.
@@ -18,6 +18,27 @@ let timerInterval = null;
 let tryOnTimerInterval = null;
 let tryOnStartTime = 0;
 let currentPoseIndex = 0;
+
+// Non-blocking toast notification
+function showPageToast(msg, duration = 3500) {
+  let toast = document.getElementById('nova-search-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'nova-search-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(100px);background:#1a1a2e;color:#fff;padding:12px 24px;border-radius:12px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;z-index:99999;box-shadow:0 8px 32px rgba(0,0,0,0.3);transition:transform 0.3s ease,opacity 0.3s ease;opacity:0;max-width:400px;text-align:center;border:1px solid rgba(196,75,255,0.3);';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  requestAnimationFrame(() => {
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+    toast.style.opacity = '1';
+  });
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => {
+    toast.style.transform = 'translateX(-50%) translateY(100px)';
+    toast.style.opacity = '0';
+  }, duration);
+}
 let currentFraming = 'full';
 
 // ---------------------------------------------------------------------------
@@ -185,18 +206,42 @@ function createProductCard(product, index) {
   card.className = "nova-card";
   card.dataset.product = JSON.stringify(product);
 
+  // Image container with number badge
+  const imgWrap = document.createElement("div");
+  imgWrap.className = "nova-card-image-wrap";
+  imgWrap.style.position = "relative";
+
+  const numberBadge = document.createElement("span");
+  numberBadge.className = "nova-card-number";
+  numberBadge.textContent = index + 1;
+  imgWrap.appendChild(numberBadge);
+
   const img = document.createElement("img");
   img.className = "nova-card-image";
-  img.src = product.image_url;
+  // Only set src if we have a valid image URL
+  if (product.image_url && product.image_url.startsWith("http")) {
+    img.src = product.image_url;
+  } else {
+    // Use retailer favicon as minimal fallback
+    try {
+      const prodUrl = new URL(product.product_url);
+      img.src = `https://www.google.com/s2/favicons?domain=${prodUrl.hostname}&sz=128`;
+    } catch (_) {
+      img.src = "data:image/svg+xml," + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect fill="#f5f5f5" width="200" height="200"/><text x="50%" y="45%" text-anchor="middle" fill="#bbb" font-size="48">&#128722;</text><text x="50%" y="65%" text-anchor="middle" fill="#999" font-size="12">Product Image</text></svg>'
+      );
+    }
+  }
   img.alt = product.title;
   img.addEventListener("error", function () {
     this.src =
       "data:image/svg+xml," +
       encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect fill="#f0f0f0" width="200" height="200"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="#999" font-size="14">No Image</text></svg>'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect fill="#f5f5f5" width="200" height="200"/><text x="50%" y="45%" text-anchor="middle" fill="#bbb" font-size="48">&#128722;</text><text x="50%" y="65%" text-anchor="middle" fill="#999" font-size="12">Product Image</text></svg>'
       );
   });
-  card.appendChild(img);
+  imgWrap.appendChild(img);
+  card.appendChild(imgWrap);
 
   const body = document.createElement("div");
   body.className = "nova-card-body";
@@ -377,8 +422,8 @@ async function handleTryOn(index) {
     );
 
     if (!photos || !photos.bodyPhoto) {
-      alert(
-        "Please upload your body photo first!\n\nOpen the SuperNova TryOnMe extension panel and complete your profile setup."
+      showPageToast(
+        "Please upload your body photo first! Open the extension panel and complete your profile setup."
       );
       return;
     }
@@ -421,7 +466,8 @@ async function handleTryOn(index) {
         analysisResult ? analysisResult.garmentClass : null, // garmentClass from analysis
         "SEAMLESS",                                        // mergeStyle
         currentFraming,                                    // framing from side panel
-        currentPoseIndex                                   // poseIndex from side panel
+        currentPoseIndex,                                  // poseIndex from side panel
+        product.title || ""                                // productTitle for classifier
       ),
       180000
     );
@@ -456,7 +502,7 @@ async function handleTryOn(index) {
     stopTryOnTimer();
     console.error(`%c ✗ TRY-ON FAILED %c ${err.message}`, "background:#f44336;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px;", "color:#f44336;font-weight:bold;");
     closeTryOnModal();
-    alert("Try-on failed: " + err.message);
+    showPageToast("Try-on failed: " + err.message);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -525,12 +571,13 @@ function showTryOnResult(base64Image, product) {
   favBtn.innerHTML = "&#9825; Save to Favorites";
   favBtn.addEventListener("click", async () => {
     try {
-      // Extract ASIN from product_url (e.g. https://www.amazon.com/dp/B0123ABC)
+      // Extract product ID from product_url (e.g. https://www.amazon.com/dp/B0123ABC)
       const asinMatch = (product.product_url || "").match(/\/dp\/([A-Z0-9]{10})/);
-      const asin = asinMatch ? asinMatch[1] : product.asin || "";
+      const productId = asinMatch ? asinMatch[1] : product.asin || "";
 
       await ApiClient.addFavorite({
-        asin,
+        productId,
+        retailer: "amazon",
         productTitle: product.title || "",
         productImage: product.image_url || "",
         category: "",
@@ -540,13 +587,179 @@ function showTryOnResult(base64Image, product) {
       favBtn.innerHTML = "&#9829; Saved!";
       favBtn.classList.add("nova-btn-favorite--saved");
       favBtn.disabled = true;
+      showPageToast("Added to favorites!");
     } catch (err) {
       console.error("[SmartSearch] Failed to save favorite:", err);
-      alert("Failed to save: " + err.message);
+      showPageToast("Failed to save: " + err.message);
     }
   });
   favDiv.appendChild(favBtn);
   body.appendChild(favDiv);
+
+  // Animate button
+  const animateDiv = document.createElement("div");
+  animateDiv.style.cssText = "text-align:center; margin-top:8px;";
+  const animateBtn = document.createElement("button");
+  animateBtn.className = "nova-btn nova-btn-primary";
+  animateBtn.innerHTML = "&#9654; Animate";
+  animateBtn.addEventListener("click", () => handleAnimate(body, base64Image, animateBtn, product));
+  animateDiv.appendChild(animateBtn);
+  body.appendChild(animateDiv);
+}
+
+// ---------------------------------------------------------------------------
+// Video Animation
+// ---------------------------------------------------------------------------
+async function handleAnimate(body, resultImageBase64, btn, product) {
+  btn.disabled = true;
+  btn.textContent = "Generating video... 0s";
+
+  const videoStart = Date.now();
+  const videoTimerInterval = setInterval(() => {
+    const elapsed = ((Date.now() - videoStart) / 1000).toFixed(0);
+    btn.textContent = `Generating video... ${elapsed}s`;
+  }, 1000);
+
+  try {
+    const response = await ApiClient.generateVideo(resultImageBase64);
+    const jobId = response.jobId;
+    const videoProvider = response.provider || "grok";
+
+    // Poll for video completion
+    const videoResult = await pollVideoStatus(jobId, videoProvider);
+
+    clearInterval(videoTimerInterval);
+    const videoElapsed = ((Date.now() - videoStart) / 1000).toFixed(1);
+
+    // Display the video
+    const videoContainer = document.createElement("div");
+    videoContainer.style.cssText = "text-align:center; margin-top:12px;";
+    const videoSrc = videoResult.videoBase64
+      ? `data:${videoResult.videoMimeType || "video/mp4"};base64,${videoResult.videoBase64}`
+      : videoResult.videoUrl;
+
+    const video = document.createElement("video");
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.style.cssText = "max-width:100%; border-radius:8px;";
+    const source = document.createElement("source");
+    source.src = videoSrc;
+    source.type = "video/mp4";
+    video.appendChild(source);
+    videoContainer.appendChild(video);
+
+    const actionsDiv = document.createElement("div");
+    actionsDiv.style.cssText = "margin-top:8px; display:flex; justify-content:center; gap:8px; align-items:center;";
+
+    const elapsedSpan = document.createElement("span");
+    elapsedSpan.style.cssText = "font-size:12px; color:#888;";
+    elapsedSpan.textContent = `Video generated in ${videoElapsed}s`;
+    actionsDiv.appendChild(elapsedSpan);
+
+    // Save button
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "nova-btn nova-btn-primary";
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.textContent = "Saving...";
+      saveBtn.disabled = true;
+      try {
+        const asinMatch = (product.product_url || "").match(/\/dp\/([A-Z0-9]{10})/);
+        const productId = asinMatch ? asinMatch[1] : product.asin || "";
+        await ApiClient.saveVideo(
+          videoResult.videoUrl || null,
+          videoResult.videoBase64 || null,
+          productId,
+          product.title || "",
+          product.image_url || "",
+          "amazon"
+        );
+        saveBtn.textContent = "Saved!";
+      } catch (err) {
+        console.error("[SmartSearch] Failed to save video:", err);
+        saveBtn.textContent = "Failed";
+        setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 2000);
+      }
+    });
+    actionsDiv.appendChild(saveBtn);
+
+    // Download button
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "nova-btn nova-btn-secondary";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", async () => {
+      downloadBtn.textContent = "Downloading...";
+      downloadBtn.disabled = true;
+      try {
+        const resp = await fetch(videoSrc);
+        const blob = await resp.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = "tryon-video-" + Date.now() + ".mp4";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+        downloadBtn.textContent = "Download";
+        downloadBtn.disabled = false;
+      } catch (err) {
+        console.error("[SmartSearch] Download failed:", err);
+        downloadBtn.textContent = "Failed";
+        setTimeout(() => { downloadBtn.textContent = "Download"; downloadBtn.disabled = false; }, 2000);
+      }
+    });
+    actionsDiv.appendChild(downloadBtn);
+
+    videoContainer.appendChild(actionsDiv);
+    body.appendChild(videoContainer);
+
+    btn.innerHTML = "&#9654; Animate";
+    btn.disabled = false;
+  } catch (err) {
+    clearInterval(videoTimerInterval);
+    console.error("[SmartSearch] Video generation failed:", err);
+    btn.innerHTML = "&#9654; Animate";
+    btn.disabled = false;
+    const errorDiv = document.createElement("div");
+    errorDiv.style.cssText = "text-align:center; margin-top:8px; color:#f44336; font-size:13px;";
+    errorDiv.textContent = `Video generation failed: ${err.message}`;
+    body.appendChild(errorDiv);
+  }
+}
+
+let _videoPollAbort = null;
+
+async function pollVideoStatus(jobId, provider) {
+  const MAX_POLLS = 40;
+  const BASE_INTERVAL = 3000;
+  const MAX_INTERVAL = 15000;
+
+  if (_videoPollAbort) _videoPollAbort.abort();
+  _videoPollAbort = new AbortController();
+  const signal = _videoPollAbort.signal;
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    const delay = Math.min(BASE_INTERVAL * Math.pow(1.5, i), MAX_INTERVAL);
+    await new Promise((r) => setTimeout(r, delay));
+
+    if (signal.aborted) throw new Error("Video polling aborted");
+
+    const status = await ApiClient.getVideoStatus(jobId, provider);
+
+    if ((status.status === "Completed" || status.status === "COMPLETED") && (status.videoUrl || status.videoBase64)) {
+      _videoPollAbort = null;
+      return status;
+    }
+    if (status.status === "Failed" || status.status === "FAILED") {
+      _videoPollAbort = null;
+      throw new Error(status.failureMessage || status.error || "Video generation failed");
+    }
+  }
+
+  _videoPollAbort = null;
+  throw new Error("Video generation timed out");
 }
 
 function closeTryOnModal() {

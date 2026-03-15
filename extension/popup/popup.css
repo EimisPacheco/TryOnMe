@@ -1,5 +1,5 @@
 /* ==========================================================================
-   NovaTryOnMe - Popup Stylesheet
+   GeminiTryOnMe - Popup Stylesheet
    Modern wizard + auth design
    ========================================================================== */
 
@@ -965,4 +965,280 @@ select.text-input { cursor: pointer; }
 .btn-danger-destructive:hover:not(:disabled) {
   background: #fff0f0;
   border-color: #cc0c39;
+}
+
+/* ---- Confetti Celebration ---- */
+.confetti-container {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  overflow: hidden;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -10px;
+  width: 8px;
+  height: 8px;
+  opacity: 0;
+  animation: confetti-fall 3s ease-out forwards;
+}
+
+@keyframes confetti-fall {
+  0% { opacity: 1; transform: translateY(0) rotate(0deg) scale(1); }
+  100% { opacity: 0; transform: translateY(600px) rotate(720deg) scale(0.3); }
+}
+
+/* ---- Retailer Badges ---- */
+.fav-card-retailer {
+  display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 6px; border-radius: 3px; margin-bottom: 4px;
+}
+.fav-retailer-amazon { background: #fff3e0; color: #c45500; }
+.fav-retailer-shein { background: #fce4ec; color: #c62828; }
+.fav-retailer-temu { background: #fff3e0; color: #e65100; }
+.fav-retailer-google-shopping { background: #e3f2fd; color: #1565c0; }
+
+/* ---- Favorites Cart Checkbox & Bar ---- */
+.fav-card-checkbox {
+  appearance: none; -webkit-appearance: none;
+  width: 20px; height: 20px; border: 2px solid #ccc; border-radius: 4px;
+  flex-shrink: 0; cursor: pointer; position: relative; transition: all 0.2s;
+  align-self: center; margin-right: -4px;
+}
+.fav-card-checkbox:checked {
+  background: #FF9900; border-color: #FF9900;
+}
+.fav-card-checkbox:checked::after {
+  content: '✓'; color: #fff; font-size: 14px; font-weight: 700;
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+}
+.fav-card-checkbox:hover { border-color: #FF9900; }
+.fav-card.fav-card-selected { border-color: #FF9900; background: #fff8ee; }
+.fav-outfit-card.fav-card-selected { background: #fff8ee; }
+
+.fav-cart-bar {
+  position: sticky; bottom: 0; background: #fff; border-top: 1px solid #e8e8e8;
+  padding: 10px 12px; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; box-shadow: 0 -2px 8px rgba(0,0,0,0.08); z-index: 10;
+}
+.fav-cart-count { font-size: 12px; color: #555; font-weight: 600; }
+.fav-cart-btn { white-space: nowrap; }
+.fav-cart-bar[hidden] { display: none; }
+.fav-cart-bar .fav-cart-btn:disabled {
+  opacity: 0.6; cursor: not-allowed;
+}
+.fav-cart-success {
+  text-align: center; padding: 16px; color: #00c853; font-weight: 600; font-size: 13px;
+}
+
+/* ---- Cosmetics / Beauty Try-On ---- */
+.cosmetics-form { display: flex; flex-direction: column; gap: 10px; }
+.cosmetics-row { display: flex; flex-direction: column; gap: 4px; }
+.cosmetics-label { font-size: 11px; font-weight: 600; color: #565959; }
+.cosmetics-select { font-size: 12px; }
+.cosmetics-colors {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.cosmetics-swatch {
+  width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent;
+  cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.cosmetics-swatch:hover { transform: scale(1.15); }
+.cosmetics-swatch.selected {
+  border-color: #232f3e; box-shadow: 0 0 0 2px #FF9900;
+}
+.cosmetics-result {
+  text-align: center; margin-top: 8px;
+}
+.cosmetics-result img {
+  max-width: 100%; border-radius: 10px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.cosmetics-result-label {
+  font-size: 10px; color: #888; margin-top: 4px;
+}
+.cosmetics-face-selector {
+  display: flex; gap: 8px; align-items: center;
+}
+.cosmetics-face-loading {
+  font-size: 11px; color: #888; margin: 0;
+}
+.cosmetics-face-thumb {
+  width: 56px; height: 56px; border-radius: 50%; object-fit: cover;
+  border: 3px solid transparent; cursor: pointer;
+  transition: all 0.2s; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+.cosmetics-face-thumb:hover { transform: scale(1.08); }
+.cosmetics-face-thumb.selected {
+  border-color: #FF9900; box-shadow: 0 0 0 2px #FF9900;
+}
+
+/* ===================== Giselle Voice Assistant ===================== */
+.giselle-fab {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FF6B9D, #C44BFF);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(196, 75, 255, 0.4);
+  z-index: 1000;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.giselle-fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(196, 75, 255, 0.6);
+}
+.giselle-fab.active {
+  background: linear-gradient(135deg, #C44BFF, #FF6B9D);
+}
+.giselle-panel {
+  position: fixed;
+  bottom: 72px;
+  right: 8px;
+  left: 8px;
+  max-height: 60vh;
+  background: #1a1a2e;
+  border-radius: 16px;
+  border: 1px solid rgba(196, 75, 255, 0.3);
+  display: flex;
+  flex-direction: column;
+  z-index: 999;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.giselle-panel.hidden { display: none; }
+.giselle-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, rgba(196, 75, 255, 0.15), rgba(255, 107, 157, 0.15));
+  border-bottom: 1px solid rgba(196, 75, 255, 0.2);
+}
+.giselle-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FFF0E6, #FFE0F0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 2px solid rgba(196, 75, 255, 0.3);
+  flex-shrink: 0;
+  flex-shrink: 0;
+}
+.giselle-name { color: #fff; font-weight: 600; font-size: 14px; }
+.giselle-subtitle { color: #aaa; font-size: 11px; }
+.giselle-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.giselle-close:hover { color: #fff; }
+.giselle-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 35vh;
+}
+.giselle-msg {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 90%;
+  word-wrap: break-word;
+}
+.giselle-msg-bot {
+  background: rgba(196, 75, 255, 0.12);
+  color: #e0d0f0;
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+.giselle-msg-user {
+  background: rgba(255, 153, 0, 0.15);
+  color: #f0e0c0;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+.giselle-msg-typing {
+  color: #aaa;
+  font-style: italic;
+}
+.giselle-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(196, 75, 255, 0.2);
+  align-items: center;
+}
+.giselle-input-row .text-input {
+  flex: 1;
+  font-size: 13px;
+}
+.giselle-mic-btn, .giselle-send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.giselle-mic-btn {
+  background: rgba(255, 107, 157, 0.2);
+  color: #FF6B9D;
+}
+.giselle-mic-btn:hover { background: rgba(255, 107, 157, 0.35); }
+.giselle-mic-btn.recording {
+  background: #FF6B9D;
+  color: white;
+  animation: giselle-pulse 1s infinite;
+}
+.giselle-send-btn {
+  background: rgba(196, 75, 255, 0.2);
+  color: #C44BFF;
+}
+.giselle-send-btn:hover { background: rgba(196, 75, 255, 0.35); }
+@keyframes giselle-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 157, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 107, 157, 0); }
+}
+.giselle-live-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.giselle-fab.streaming .giselle-live-dot,
+.giselle-fab.streaming ~ .giselle-panel .giselle-live-dot {
+  display: inline-block;
+  animation: giselle-dot-pulse 1.5s infinite;
+}
+@keyframes giselle-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }

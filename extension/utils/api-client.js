@@ -1,7 +1,7 @@
 /**
- * NovaTryOnMe - API Client
+ * GeminiTryOnMe - API Client
  *
- * Provides a clean interface for communicating with the NovaTryOnMe backend.
+ * Provides a clean interface for communicating with the GeminiTryOnMe backend.
  * In content script context, all requests are routed through background.js
  * via chrome.runtime.sendMessage. Auth tokens are injected by background.js.
  */
@@ -38,7 +38,7 @@ class ApiClient {
 
   // --- Virtual Try-On ---
 
-  static tryOn(bodyImageBase64, garmentImageBase64, garmentClass, mergeStyle = "SEAMLESS", framing = "full", poseIndex = 0) {
+  static tryOn(bodyImageBase64, garmentImageBase64, garmentClass, mergeStyle = "SEAMLESS", framing = "full", poseIndex = 0, productTitle = "") {
     return ApiClient._sendMessage({
       type: "TRY_ON",
       bodyImageBase64,
@@ -47,6 +47,7 @@ class ApiClient {
       mergeStyle,
       framing,
       poseIndex,
+      productTitle,
     });
   }
 
@@ -59,12 +60,12 @@ class ApiClient {
     });
   }
 
-  // --- Background Removal ---
-
-  static removeBackground(imageBase64) {
+  static tryOnAccessory(faceImageBase64, productImageBase64, accessoryType) {
     return ApiClient._sendMessage({
-      type: "REMOVE_BG",
-      imageBase64,
+      type: "TRY_ON_ACCESSORY",
+      faceImageBase64,
+      productImageBase64,
+      accessoryType,
     });
   }
 
@@ -86,96 +87,16 @@ class ApiClient {
     });
   }
 
-  static saveVideo(videoUrl, videoBase64, asin, productTitle, productImage) {
+  static saveVideo(videoUrl, videoBase64, productId, productTitle, productImage, retailer) {
     return ApiClient._sendMessage({
       type: "API_CALL",
       endpoint: "/api/video/save",
       method: "POST",
-      data: { videoUrl, videoBase64, asin, productTitle, productImage },
-    });
-  }
-
-  // --- Auth ---
-
-  static getAuthStatus() {
-    return ApiClient._sendMessage({ type: "GET_AUTH_STATUS" });
-  }
-
-  static signIn(email, password) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/auth/login",
-      method: "POST",
-      data: { email, password },
-    });
-  }
-
-  static signUp(email, password) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/auth/signup",
-      method: "POST",
-      data: { email, password },
-    });
-  }
-
-  static confirmEmail(email, code) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/auth/confirm",
-      method: "POST",
-      data: { email, code },
-    });
-  }
-
-  static refreshToken(refreshToken) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/auth/refresh",
-      method: "POST",
-      data: { refreshToken },
-    });
-  }
-
-  // --- Profile ---
-
-  static getProfile() {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/profile",
-      method: "GET",
-      data: {},
-    });
-  }
-
-  static updateProfile(data) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/profile",
-      method: "PUT",
-      data,
-    });
-  }
-
-  static uploadPhoto(type, image) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/profile/photos",
-      method: "POST",
-      data: { type, image },
+      data: { videoUrl, videoBase64, productId, retailer, productTitle, productImage },
     });
   }
 
   // --- Favorites ---
-
-  static getFavorites() {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: "/api/favorites",
-      method: "GET",
-      data: {},
-    });
-  }
 
   static addFavorite(data) {
     return ApiClient._sendMessage({
@@ -183,24 +104,6 @@ class ApiClient {
       endpoint: "/api/favorites",
       method: "POST",
       data,
-    });
-  }
-
-  static removeFavorite(asin) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: `/api/favorites/${encodeURIComponent(asin)}`,
-      method: "DELETE",
-      data: {},
-    });
-  }
-
-  static checkFavorite(asin) {
-    return ApiClient._sendMessage({
-      type: "API_CALL",
-      endpoint: `/api/favorites/${encodeURIComponent(asin)}`,
-      method: "GET",
-      data: {},
     });
   }
 

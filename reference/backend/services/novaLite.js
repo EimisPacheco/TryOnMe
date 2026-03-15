@@ -17,8 +17,8 @@ async function analyzeProduct(imageBase64, title, breadcrumbs) {
 Analyze the product image and information provided, then return a JSON response with the following structure:
 {
   "category": "clothing" | "footwear" | "cosmetics" | "accessories" | "unsupported",
-  "garmentClass": "UPPER_BODY" | "LOWER_BODY" | "FULL_BODY" | "FOOTWEAR" | null,
-  "garmentSubClass": "LONG_SLEEVE_SHIRT" | "SHORT_SLEEVE_SHIRT" | "NO_SLEEVE_SHIRT" | "LONG_PANTS" | "SHORT_PANTS" | "LONG_DRESS" | "SHORT_DRESS" | "FULL_BODY_OUTFIT" | "SHOES" | "BOOTS" | null,
+  "garmentClass": "UPPER_BODY" | "LOWER_BODY" | "FULL_BODY" | "FOOTWEAR" | "ACCESSORY" | null,
+  "garmentSubClass": "LONG_SLEEVE_SHIRT" | "SHORT_SLEEVE_SHIRT" | "NO_SLEEVE_SHIRT" | "LONG_PANTS" | "SHORT_PANTS" | "LONG_DRESS" | "SHORT_DRESS" | "FULL_BODY_OUTFIT" | "SHOES" | "BOOTS" | "EARRINGS" | "NECKLACE" | "BRACELET" | "RING" | "WATCH" | "SUNGLASSES" | "HAT" | null,
   "cosmeticType": "lipstick" | "eyeshadow" | "blush" | "foundation" | "eyeliner" | "mascara" | null,
   "color": "the primary color of the product",
   "styleTips": ["tip1", "tip2", "tip3"]
@@ -33,7 +33,14 @@ Classification rules:
 - Eye shadow, eye palette → category: "cosmetics", cosmeticType: "eyeshadow"
 - Blush, bronzer, highlighter → category: "cosmetics", cosmeticType: "blush"
 - Foundation, concealer, powder, BB cream → category: "cosmetics", cosmeticType: "foundation"
-- Jewelry, watches, bags, hats → category: "accessories" (not yet supported for try-on)
+- Earrings, ear studs, ear cuffs, ear drops → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "EARRINGS"
+- Necklaces, pendants, chains, chokers → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "NECKLACE"
+- Bracelets, bangles, cuffs, wristbands → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "BRACELET"
+- Rings, bands → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "RING"
+- Watches, smartwatches → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "WATCH"
+- Sunglasses, eyeglasses → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "SUNGLASSES"
+- Hats, caps, beanies, headbands → category: "accessories", garmentClass: "ACCESSORY", garmentSubClass: "HAT"
+- Bags, purses, backpacks → category: "unsupported"
 - Everything else → category: "unsupported"
 
 CRITICAL classification rule for TWO-PIECE SETS:
@@ -229,4 +236,98 @@ IMPORTANT: Return ONLY valid JSON, no additional text.`;
   }
 }
 
-module.exports = { analyzeProduct, classifyOutfit, hasPersonInImage };
+/**
+ * Analyze product images against the user's photo to provide personalized
+ * style recommendations. Sends user photo + up to 8 product images to
+ * Nova 2 Lite in a single call.
+ *
+ * @param {string} userPhotoBase64 - User's body photo (base64)
+ * @param {Array} productData - [{ number, title, price, rating, reviewCount }]
+ * @param {object} userProfile - { sex, clothesSize, shoesSize }
+ * @param {string|null} screenshotBase64 - screenshot of the results page (optional)
+ * @returns {Array} [{ number, score, reason }]
+ */
+async function recommendItems(userPhotoBase64, productData, userProfile, screenshotBase64 = null) {
+  const sex = userProfile?.sex || "unknown";
+  const size = userProfile?.clothesSize || "unknown";
+
+  const contentBlocks = [];
+
+  // 1. User's body photo
+  contentBlocks.push({
+    image: {
+      format: detectImageFormat(userPhotoBase64),
+      source: { bytes: Buffer.from(userPhotoBase64, "base64") },
+    },
+  });
+  contentBlocks.push({ text: "IMAGE 1: This is the USER's body photo. Analyze their body type, skin tone, and overall style.\n" });
+
+  // 2. Screenshot of the results page (shows all products visually with numbers, prices, images)
+  if (screenshotBase64) {
+    contentBlocks.push({
+      image: {
+        format: detectImageFormat(screenshotBase64),
+        source: { bytes: Buffer.from(screenshotBase64, "base64") },
+      },
+    });
+    contentBlocks.push({ text: "IMAGE 2: This is a screenshot of the search results page showing all the products the user is browsing. Each product has a numbered badge, image, title, and price visible. Use this to visually assess the colors, styles, and patterns of each product.\n" });
+  }
+
+  // 3. Structured product data for ALL items (up to 20)
+  const productList = productData.map((p) =>
+    `#${p.number}: "${p.title}" — ${p.price || "no price"}${p.rating ? ` — ${p.rating} stars` : ""}${p.reviewCount ? ` (${p.reviewCount} reviews)` : ""}`
+  ).join("\n");
+
+  contentBlocks.push({
+    text: `Here are ALL ${productData.length} products to analyze:
+
+${productList}
+
+Based on the user's photo (IMAGE 1)${screenshotBase64 ? " and the results page screenshot (IMAGE 2)" : ""}, recommend which items would look best on this person. Consider body type, skin tone, color harmony, style compatibility, and value (ratings/reviews).
+
+The user is ${sex}, size ${size}.
+
+Return a JSON array sorted from BEST to WORST match. Include ALL ${productData.length} items:
+[
+  { "number": 3, "score": 9, "reason": "The warm coral tone beautifully complements your skin, and the V-neck flatters your frame" },
+  { "number": 1, "score": 7, "reason": "Classic cut works well, but the cool white might wash you out slightly" },
+  ...
+]
+
+Score 1-10. Reasons should be personal and specific to THIS user's appearance — reference their body type, skin tone, coloring. Be like an honest stylist friend. Also factor in ratings and review counts as a quality signal.
+
+IMPORTANT: Return ONLY valid JSON array, no additional text.`,
+  });
+
+  console.log(`[novaLite] recommendItems: ${productData.length} products, screenshot: ${!!screenshotBase64}, user: ${sex} size ${size}`);
+
+  const response = await bedrockClient.send(
+    new ConverseCommand({
+      modelId: "us.amazon.nova-2-lite-v1:0",
+      messages: [{ role: "user", content: contentBlocks }],
+      system: [
+        {
+          text: "You are an expert personal stylist AI. You analyze a person's photo and product images to give honest, personalized fashion recommendations. You consider body type, skin tone, face shape, current style, and color theory. When a screenshot of the results page is provided, use it to visually assess each product's colors, patterns, and style. Your recommendations are specific to the person — never generic.",
+        },
+      ],
+      inferenceConfig: { maxTokens: 2048, temperature: 0.3 },
+    })
+  );
+
+  const responseText = response.output.message.content[0].text;
+
+  let jsonStr = responseText;
+  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) jsonStr = jsonMatch[1].trim();
+
+  try {
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    const arrayMatch = responseText.match(/\[[\s\S]*\]/);
+    if (arrayMatch) return JSON.parse(arrayMatch[0]);
+    console.error("[novaLite] recommendItems parse error:", responseText);
+    return [{ number: 1, score: 5, reason: "Could not analyze images" }];
+  }
+}
+
+module.exports = { analyzeProduct, classifyOutfit, hasPersonInImage, recommendItems };

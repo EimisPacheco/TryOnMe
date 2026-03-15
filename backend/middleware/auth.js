@@ -1,23 +1,19 @@
-const jwt = require("jsonwebtoken");
-const jwksClient = require("jwks-rsa");
+const admin = require('firebase-admin');
+const fs = require('fs');
 
-const REGION = process.env.COGNITO_REGION || process.env.AWS_REGION || "us-east-1";
-const USER_POOL_ID = process.env.COGNITO_USER_POOL_ID;
-
-const jwksUri = `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}/.well-known/jwks.json`;
-
-const client = jwksClient({
-  jwksUri,
-  cache: true,
-  cacheMaxAge: 600000, // 10 minutes
-});
-
-function getKey(header, callback) {
-  client.getSigningKey(header.kid, (err, key) => {
-    if (err) return callback(err);
-    const signingKey = key.getPublicKey();
-    callback(null, signingKey);
-  });
+// Ensure Firebase Admin is initialized (may already be initialized by firebaseAuth.js)
+// Supports both file-based credentials (local dev) and ADC (Cloud Run)
+if (!admin.apps.length) {
+  const projectId = process.env.GCP_PROJECT_ID || process.env.FIREBASE_PROJECT_ID;
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const serviceAccount = JSON.parse(fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, 'utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId,
+    });
+  } else {
+    admin.initializeApp({ projectId });
+  }
 }
 
 /**
@@ -31,18 +27,16 @@ function requireAuth(req, res, next) {
 
   const token = authHeader.split(" ")[1];
 
-  jwt.verify(token, getKey, {
-    algorithms: ["RS256"],
-    issuer: `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`,
-  }, (err, decoded) => {
-    if (err || !decoded || !decoded.sub) {
-      console.error("[auth] Token verification failed:", err?.message || "missing sub claim");
+  admin.auth().verifyIdToken(token)
+    .then((decoded) => {
+      req.userId = decoded.uid;
+      req.userEmail = decoded.email || "";
+      next();
+    })
+    .catch((err) => {
+      console.error("[auth] Token verification failed:", err.message);
       return res.status(401).json({ error: "Invalid or expired token" });
-    }
-    req.userId = decoded.sub;
-    req.userEmail = decoded.email || "";
-    next();
-  });
+    });
 }
 
 /**
@@ -56,19 +50,19 @@ function optionalAuth(req, res, next) {
 
   const token = authHeader.split(" ")[1];
 
-  jwt.verify(token, getKey, {
-    algorithms: ["RS256"],
-    issuer: `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`,
-  }, (err, decoded) => {
-    if (!err && decoded) {
-      req.userId = decoded.sub;
+  admin.auth().verifyIdToken(token)
+    .then((decoded) => {
+      req.userId = decoded.uid;
       req.userEmail = decoded.email;
-      return next();
-    }
-    // Token was provided but is expired/invalid → return 401 so client can refresh
-    console.error("[auth] optionalAuth token expired/invalid:", err?.message);
-    return res.status(401).json({ error: "Token expired" });
-  });
+      next();
+    })
+    .catch((err) => {
+      // Token was provided but is expired/invalid — proceed without auth
+      // so the endpoint still works for unauthenticated users.
+      // The client handles token refresh independently.
+      console.warn("[auth] optionalAuth token invalid, proceeding without auth:", err.message);
+      next();
+    });
 }
 
 module.exports = { requireAuth, optionalAuth };

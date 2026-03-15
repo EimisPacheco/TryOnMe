@@ -1,5 +1,5 @@
 /**
- * NovaTryOnMe - Image Utility Functions
+ * GeminiTryOnMe - Image Utility Functions
  *
  * Provides helpers for fetching and converting images.
  * All functions work with base64-encoded strings.
@@ -24,8 +24,9 @@ async function fetchImageAsBase64(url) {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-  } catch {
+  } catch (directErr) {
     // Attempt 2: Proxy through background service worker
+    console.warn("[GeminiTryOnMe] Direct image fetch blocked by CORS, falling back to background proxy:", directErr.message || "unknown error");
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
         { type: "PROXY_IMAGE", url },

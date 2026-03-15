@@ -1,7 +1,7 @@
 /* ==========================================================================
-   NovaTryOnMe - Content Script Styles
-   Injected into Amazon product pages. All classes prefixed with nova-tryon-
-   to avoid conflicts with Amazon's own styles.
+   GeminiTryOnMe - Content Script Styles
+   Injected into product pages. All classes prefixed with nova-tryon-
+   to avoid conflicts with host page styles.
    ========================================================================== */
 
 /* ---------------------------------------------------------------------------
@@ -482,57 +482,226 @@
   margin-top: 6px;
 }
 
-/* ---- Pose & Framing Controls ---- */
-.nova-tryon-controls {
-  display: flex;
-  gap: 12px;
-  padding: 8px 0;
-  margin-bottom: 8px;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
+/* ---------------------------------------------------------------------------
+   Share Row
+   --------------------------------------------------------------------------- */
+.nova-tryon-action-row {
+  text-align: center;
 }
 
-.nova-tryon-control-group {
+.nova-tryon-share-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin: 10px 0;
+}
+
+.nova-tryon-share-btn {
+  all: initial;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 6px 12px !important;
+  border: 1.5px solid #ddd !important;
+  border-radius: 8px !important;
+  background: #fff !important;
+  color: #333 !important;
+  font-family: system-ui, -apple-system, Arial, sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.nova-tryon-share-btn:hover {
+  border-color: var(--nova-orange) !important;
+  color: var(--nova-orange) !important;
+  background: #fff8ee !important;
+}
+
+.nova-tryon-share-btn svg {
+  flex-shrink: 0;
+}
+
+.nova-tryon-share-download:hover {
+  border-color: #2979FF !important;
+  color: #2979FF !important;
+  background: #f0f7ff !important;
+}
+
+.nova-tryon-share-copy:hover {
+  border-color: #00C853 !important;
+  color: #00C853 !important;
+  background: #f0fff4 !important;
+}
+
+.nova-tryon-share-email:hover {
+  border-color: #E040FB !important;
+  color: #E040FB !important;
+  background: #fdf0ff !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Email Share Dialog
+   --------------------------------------------------------------------------- */
+.nova-tryon-email-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 100000;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
 }
 
-.nova-tryon-control-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.nova-tryon-control-btns {
-  display: flex;
-  gap: 4px;
-}
-
-.nova-tryon-pose-btn,
-.nova-tryon-frame-btn {
-  padding: 4px 10px;
-  border: 1.5px solid #ddd;
-  border-radius: 6px;
+.nova-tryon-email-dialog {
   background: #fff;
-  color: #333;
-  font-size: 11px;
+  border-radius: 12px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  font-family: system-ui, -apple-system, Arial, sans-serif;
+}
+
+.nova-tryon-email-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  background: linear-gradient(135deg, #FF9900, #FF6600);
+  color: #fff;
+}
+
+.nova-tryon-email-dialog-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.nova-tryon-email-dialog-close {
+  background: rgba(255,255,255,0.2);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nova-tryon-email-dialog-close:hover {
+  background: rgba(255,255,255,0.35);
+}
+
+.nova-tryon-email-dialog-body {
+  padding: 18px;
+}
+
+.nova-tryon-email-preview {
+  width: 100%;
+  max-height: 180px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  margin-bottom: 14px;
+}
+
+.nova-tryon-email-preview img {
+  width: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.nova-tryon-email-self-btn {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 12px;
+  background: #f0f7ff;
+  border: 1.5px dashed #2979FF;
+  border-radius: 8px;
+  color: #2979FF;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.2s;
+  font-family: inherit;
 }
 
-.nova-tryon-pose-btn:hover,
-.nova-tryon-frame-btn:hover {
-  border-color: #FF9900;
-  background: #fff8ee;
+.nova-tryon-email-self-btn:hover {
+  background: #e3f0ff;
 }
 
-.nova-tryon-pose-btn.active,
-.nova-tryon-frame-btn.active {
+.nova-tryon-email-self-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  border-style: solid;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border-color: #2e7d32;
+}
+
+.nova-tryon-email-field {
+  margin-bottom: 12px;
+}
+
+.nova-tryon-email-field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 4px;
+}
+
+.nova-tryon-email-input,
+.nova-tryon-email-message {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1.5px solid #ddd;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+  box-sizing: border-box;
+}
+
+.nova-tryon-email-input:focus,
+.nova-tryon-email-message:focus {
   border-color: #FF9900;
-  background: #FF9900;
+}
+
+.nova-tryon-email-error {
+  color: #cc0c39;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.nova-tryon-email-send-btn {
+  width: 100%;
+  padding: 10px;
+  background: linear-gradient(135deg, #FF9900, #FF6600);
   color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.nova-tryon-email-send-btn:hover {
+  opacity: 0.9;
+}
+
+.nova-tryon-email-send-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 

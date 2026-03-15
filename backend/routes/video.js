@@ -1,27 +1,25 @@
 const express = require("express");
 const router = express.Router();
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { generateVideo: grokGenerateVideo, getVideoStatus: grokGetVideoStatus } = require("../services/grok");
 const { requireAuth, optionalAuth } = require("../middleware/auth");
-const { getProfile, getUserVideos, saveVideoRecord, removeVideo } = require("../services/dynamodb");
+const { validateBase64Image } = require("../middleware/validation");
+const { getProfile, getUserVideos, saveVideoRecord, removeVideo } = require("../services/firestore");
+const storage = require("../services/storage");
 
-const s3Client = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    ...(process.env.AWS_SESSION_TOKEN && { sessionToken: process.env.AWS_SESSION_TOKEN }),
-  },
-});
-
-const S3_USER_BUCKET = process.env.S3_USER_BUCKET || "nova-tryonme-users";
+// Allowed video CDN domains for SSRF prevention
+const ALLOWED_VIDEO_HOSTS = ["fal.media", "v3.fal.media", "storage.googleapis.com"];
+const VALID_VIDEO_ID = /^[A-Za-z0-9_\-]{1,100}$/;
 
 router.post("/", optionalAuth, async (req, res, next) => {
   try {
     const { image, prompt } = req.body;
     if (!image) {
       return res.status(400).json({ error: "image is required" });
+    }
+
+    const imgCheck = validateBase64Image(image);
+    if (!imgCheck.valid) {
+      return res.status(400).json({ error: `Invalid image: ${imgCheck.error}` });
     }
 
     console.log("[video] Starting video generation job - provider: grok");
@@ -32,7 +30,7 @@ router.post("/", optionalAuth, async (req, res, next) => {
       try {
         const profile = await getProfile(req.userId);
         sex = profile?.sex || null;
-      } catch (_) { /* ignore */ }
+      } catch (err) { console.warn("[video] Profile fetch failed:", err.message); }
     }
 
     const result = await grokGenerateVideo(image, prompt, sex);
@@ -42,7 +40,7 @@ router.post("/", optionalAuth, async (req, res, next) => {
   }
 });
 
-// GET /api/video/list — List user's saved videos with presigned playback URLs
+// GET /api/video/list — List user's saved videos with signed playback URLs
 // NOTE: Must be before /:jobId to avoid "list" being treated as a jobId
 router.get("/list", requireAuth, async (req, res, next) => {
   try {
@@ -51,12 +49,9 @@ router.get("/list", requireAuth, async (req, res, next) => {
 
     const enriched = await Promise.all(videos.map(async (v) => {
       try {
-        v.videoUrl = await getSignedUrl(s3Client, new GetObjectCommand({
-          Bucket: S3_USER_BUCKET,
-          Key: v.videoKey,
-        }), { expiresIn: 3600 });
+        v.videoUrl = await storage.getSignedReadUrl(v.videoKey, 3600);
       } catch (err) {
-        console.error(`[video] presigned URL failed for ${v.videoKey}:`, err.message);
+        console.error(`[video] signed URL failed for ${v.videoKey}:`, err.message);
       }
       return v;
     }));
@@ -79,10 +74,13 @@ router.get("/:jobId", async (req, res, next) => {
   }
 });
 
-// POST /api/video/save — Save a video to S3 and store metadata in DynamoDB
+// POST /api/video/save — Save a video to Cloud Storage and store metadata in Firestore
 router.post("/save", requireAuth, async (req, res, next) => {
   try {
-    const { videoUrl, videoBase64, asin, productTitle, productImage } = req.body;
+    const { videoUrl, videoBase64, productTitle, productImage } = req.body;
+    // Backward compat: accept asin if productId not provided
+    const productId = req.body.productId || req.body.asin || "";
+    const retailer = req.body.retailer || "amazon";
 
     if (!videoUrl && !videoBase64) {
       return res.status(400).json({ error: "videoUrl or videoBase64 is required" });
@@ -90,36 +88,48 @@ router.post("/save", requireAuth, async (req, res, next) => {
 
     const timestamp = Date.now();
     const videoId = `video_${timestamp}`;
-    const key = `users/${req.userId}/videos/${asin || "tryon"}_${timestamp}.mp4`;
+    const key = `users/${req.userId}/videos/${productId || "tryon"}_${timestamp}.mp4`;
 
     let videoBuffer;
     if (videoBase64) {
       videoBuffer = Buffer.from(videoBase64, "base64");
     } else {
-      const response = await fetch(videoUrl);
-      if (!response.ok) throw new Error(`Failed to fetch video: ${response.status}`);
-      videoBuffer = Buffer.from(await response.arrayBuffer());
+      // Validate videoUrl against allowed CDN domains to prevent SSRF
+      let parsedUrl;
+      try {
+        parsedUrl = new URL(videoUrl);
+      } catch {
+        return res.status(400).json({ error: "Invalid videoUrl" });
+      }
+      if (!ALLOWED_VIDEO_HOSTS.some((h) => parsedUrl.hostname === h || parsedUrl.hostname.endsWith("." + h))) {
+        return res.status(400).json({ error: "videoUrl must be from an allowed video CDN" });
+      }
+      const controller = new AbortController();
+      const fetchTimeout = setTimeout(() => controller.abort(), 30000);
+      try {
+        const response = await fetch(videoUrl, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Failed to fetch video: ${response.status}`);
+        videoBuffer = Buffer.from(await response.arrayBuffer());
+      } finally {
+        clearTimeout(fetchTimeout);
+      }
     }
 
-    console.log(`[video] Saving video to S3: ${key} (${videoBuffer.length} bytes)`);
+    console.log(`[video] Saving video: ${key} (${videoBuffer.length} bytes)`);
 
-    await s3Client.send(new PutObjectCommand({
-      Bucket: S3_USER_BUCKET,
-      Key: key,
-      Body: videoBuffer,
-      ContentType: "video/mp4",
-    }));
+    await storage.uploadFile(key, videoBuffer, "video/mp4");
 
-    // Store metadata in DynamoDB
+    // Store metadata in Firestore
     const record = await saveVideoRecord(req.userId, {
       videoId,
       videoKey: key,
-      asin: asin || "",
+      productId,
+      retailer,
       productTitle: productTitle || "",
       productImage: productImage || "",
     });
 
-    console.log(`[video] Video saved to S3 + DynamoDB: ${key}`);
+    console.log(`[video] Video saved: ${key}`);
     res.json({ videoKey: key, videoId: record.videoId });
   } catch (error) {
     next(error);
@@ -129,7 +139,11 @@ router.post("/save", requireAuth, async (req, res, next) => {
 // DELETE /api/video/:videoId — Remove a saved video
 router.delete("/:videoId", requireAuth, async (req, res, next) => {
   try {
-    const result = await removeVideo(req.userId, req.params.videoId);
+    const vid = req.params.videoId;
+    if (!VALID_VIDEO_ID.test(vid)) {
+      return res.status(400).json({ error: "Invalid videoId format" });
+    }
+    const result = await removeVideo(req.userId, vid);
     res.json(result);
   } catch (error) {
     next(error);
