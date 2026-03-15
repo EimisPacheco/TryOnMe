@@ -40,7 +40,7 @@ function getClient() {
 }
 
 /**
- * Background removal using Gemini 2.5 Flash Image
+ * Background removal using Gemini 3 Pro Image
  */
 async function removeBackground(imageBase64) {
   console.log("[geminiCanvas] removeBackground - processing");
@@ -48,7 +48,7 @@ async function removeBackground(imageBase64) {
   const client = getClient();
 
   const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
-    model: "gemini-2.5-flash-preview-04-17",
+    model: "gemini-2.5-flash-image",
     contents: [
       {
         role: "user",
@@ -110,7 +110,7 @@ CRITICAL RULES:
 - Output only the resulting image.`;
 
   const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
-    model: "gemini-2.5-flash-preview-04-17",
+    model: "gemini-2.5-flash-image",
     contents: [
       {
         role: "user",
@@ -200,7 +200,7 @@ CRITICAL RULES:
 - Output only the resulting image.`;
 
   const response = await withCircuitBreaker("gemini", () => withTimeout(client.models.generateContent({
-    model: "gemini-2.5-flash-preview-04-17",
+    model: "gemini-2.5-flash-image",
     contents: [
       {
         role: "user",

@@ -1407,10 +1407,16 @@ async function init() {
       errorEl.textContent = 'Please describe at least a top or bottom';
       return;
     }
+    const necklace = document.getElementById('outfitNecklace').value.trim();
+    const earrings = document.getElementById('outfitEarrings').value.trim();
+    const bracelet = document.getElementById('outfitBracelets').value.trim();
     const outfitParams = new URLSearchParams();
     if (top) outfitParams.set('top', top);
     if (bottom) outfitParams.set('bottom', bottom);
     if (shoes) outfitParams.set('shoes', shoes);
+    if (necklace) outfitParams.set('necklace', necklace);
+    if (earrings) outfitParams.set('earrings', earrings);
+    if (bracelet) outfitParams.set('bracelets', bracelet);
     if (cachedProfile?.clothesSize) outfitParams.set('clothesSize', cachedProfile.clothesSize);
     if (cachedProfile?.shoesSize) outfitParams.set('shoesSize', cachedProfile.shoesSize);
     if (cachedProfile?.sex) outfitParams.set('sex', cachedProfile.sex);

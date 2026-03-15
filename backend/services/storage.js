@@ -14,9 +14,14 @@ async function uploadFile(key, buffer, contentType) {
   await file.save(buffer, { contentType, resumable: false });
 }
 
-async function downloadFileBase64(key) {
+async function downloadFile(key) {
   const file = bucket.file(key);
   const [buffer] = await file.download();
+  return buffer;
+}
+
+async function downloadFileBase64(key) {
+  const buffer = await downloadFile(key);
   return buffer.toString('base64');
 }
 
@@ -33,4 +38,4 @@ async function getSignedReadUrl(key, expiresInSeconds = 3600) {
   return url;
 }
 
-module.exports = { uploadFile, downloadFileBase64, deleteAllWithPrefix, getSignedReadUrl };
+module.exports = { uploadFile, downloadFile, downloadFileBase64, deleteAllWithPrefix, getSignedReadUrl };

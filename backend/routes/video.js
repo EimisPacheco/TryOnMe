@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { generateVideo: grokGenerateVideo, getVideoStatus: grokGetVideoStatus } = require("../services/grok");
+const { generateVideo: veoGenerateVideo } = require("../services/veo");
 const { requireAuth, optionalAuth } = require("../middleware/auth");
 const { validateBase64Image } = require("../middleware/validation");
 const { getProfile, getUserVideos, saveVideoRecord, removeVideo } = require("../services/firestore");
@@ -40,6 +41,46 @@ router.post("/", optionalAuth, async (req, res, next) => {
   }
 });
 
+// POST /api/video/veo — Generate video using Google Veo 3.1 (synchronous — waits for completion)
+// Unlike Grok which returns a jobId for polling, Veo polls internally and returns the video directly.
+// The response includes videoBase64 which can be used with POST /api/video/save.
+router.post("/veo", optionalAuth, async (req, res, next) => {
+  try {
+    const { image, prompt } = req.body;
+    if (!image) {
+      return res.status(400).json({ error: "image is required" });
+    }
+
+    const imgCheck = validateBase64Image(image);
+    if (!imgCheck.valid) {
+      return res.status(400).json({ error: `Invalid image: ${imgCheck.error}` });
+    }
+
+    console.log("[video] Starting Veo 3.1 video generation (synchronous)");
+
+    // Get user's sex for correct pronouns in default prompt
+    let sex = null;
+    if (req.userId) {
+      try {
+        const profile = await getProfile(req.userId);
+        sex = profile?.sex || null;
+      } catch (err) { console.warn("[video] Profile fetch failed:", err.message); }
+    }
+
+    const result = await veoGenerateVideo(image, prompt, sex);
+
+    console.log("[video] Veo 3.1 video generation complete");
+    res.json({
+      status: "Completed",
+      videoBase64: result.videoBase64,
+      provider: "veo",
+    });
+  } catch (error) {
+    console.error("[video] Veo generation failed:", error.message);
+    next(error);
+  }
+});
+
 // GET /api/video/list — List user's saved videos with signed playback URLs
 // NOTE: Must be before /:jobId to avoid "list" being treated as a jobId
 router.get("/list", requireAuth, async (req, res, next) => {
@@ -47,18 +88,39 @@ router.get("/list", requireAuth, async (req, res, next) => {
     const videos = await getUserVideos(req.userId);
     console.log(`[video] GET list — ${videos.length} videos for user ${req.userId}`);
 
-    const enriched = await Promise.all(videos.map(async (v) => {
-      try {
-        v.videoUrl = await storage.getSignedReadUrl(v.videoKey, 3600);
-      } catch (err) {
-        console.error(`[video] signed URL failed for ${v.videoKey}:`, err.message);
+    // Build video URLs using our own streaming endpoint instead of signed GCS URLs
+    // (Cloud Run's default service account often lacks iam.serviceAccounts.signBlob permission)
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const enriched = videos.map((v) => {
+      if (v.videoKey) {
+        v.videoUrl = `${baseUrl}/api/video/stream/${encodeURIComponent(v.videoKey)}`;
       }
       return v;
-    }));
+    });
 
     res.json({ videos: enriched });
   } catch (error) {
     next(error);
+  }
+});
+
+// GET /api/video/stream/:videoKey — Stream video from Cloud Storage
+// Uses direct GCS download instead of signed URLs (avoids permission issues on Cloud Run)
+router.get("/stream/:videoKey(*)", async (req, res, next) => {
+  try {
+    const videoKey = decodeURIComponent(req.params.videoKey);
+    // Basic path traversal protection
+    if (videoKey.includes("..")) {
+      return res.status(400).json({ error: "Invalid video key" });
+    }
+    const buffer = await storage.downloadFile(videoKey);
+    res.set("Content-Type", "video/mp4");
+    res.set("Content-Length", buffer.length);
+    res.set("Cache-Control", "private, max-age=3600");
+    res.send(buffer);
+  } catch (error) {
+    console.error(`[video] Stream failed for key ${req.params.videoKey}:`, error.message);
+    res.status(404).json({ error: "Video not found" });
   }
 });
 

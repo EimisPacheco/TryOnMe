@@ -1,7 +1,7 @@
 /**
  * GeminiTryOnMe — Virtual Wardrobe (Outfit Builder)
  *
- * Opens from popup Outfit Builder tab. Fires up to 3 parallel smart-searches,
+ * Opens from popup Outfit Builder tab. Fires up to 6 parallel smart-searches,
  * populates wardrobe walls with hangers, enables item selection + try-on.
  *
  * NOTE: No inline event handlers — Chrome extension CSP forbids them.
@@ -13,11 +13,17 @@
 let selectedTop = null;
 let selectedBottom = null;
 let selectedShoes = null;
+let selectedNecklace = null;
+let selectedEarrings = null;
+let selectedBracelet = null;
 let selectedItem = null; // last selected item (for try-on target)
 let userPosePhoto = null;
 let selectedPoseIndex = 0;
 let searchStartTime = 0;
 let timerInterval = null;
+let tryOnTimerInterval = null;
+let lastTryOnResultBase64 = null;
+let lastVideoSrc = null;
 
 // Non-blocking toast notification
 function showPageToast(msg, duration = 3500) {
@@ -39,9 +45,6 @@ function showPageToast(msg, duration = 3500) {
     toast.style.opacity = '0';
   }, duration);
 }
-let tryOnTimerInterval = null;
-let lastTryOnResultBase64 = null;
-let animating = false;
 
 // ---------------------------------------------------------------------------
 // Init — parse URL params, wire events, start searches
@@ -50,6 +53,9 @@ const params = new URLSearchParams(window.location.search);
 const topQuery = params.get("top") || "";
 const bottomQuery = params.get("bottom") || "";
 const shoesQuery = params.get("shoes") || "";
+const necklaceQuery = params.get("necklace") || "";
+const earringsQuery = params.get("earrings") || "";
+const braceletsQuery = params.get("bracelets") || "";
 const clothesSizeParam = params.get("clothesSize") || "";
 const shoesSizeParam = params.get("shoesSize") || "";
 const userSexParam = params.get("sex") || "";
@@ -58,8 +64,32 @@ const sexSuffix = userSexParam === "male" ? "for men" : "for women";
 // Wire event listeners (NO inline handlers)
 document.getElementById("tryOnBtn").addEventListener("click", handleTryOn);
 document.getElementById("favoriteBtn").addEventListener("click", handleSaveFavorite);
-document.getElementById("animateBtn").addEventListener("click", handleAnimateOutfit);
+document.getElementById("animateBtn").addEventListener("click", handleAnimate);
+document.getElementById("buyBtn").addEventListener("click", handleBuyOnAmazon);
 document.getElementById("errorCloseBtn").addEventListener("click", () => window.close());
+
+// Lightbox — click mirror photo or result to view full size
+const lightbox = document.getElementById("wardrobeLightbox");
+const lightboxImg = document.getElementById("lightboxImg");
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.classList.add("active");
+}
+function closeLightbox() {
+  lightbox.classList.remove("active");
+  lightboxImg.src = "";
+}
+document.getElementById("lightboxClose").addEventListener("click", closeLightbox);
+document.getElementById("lightboxBackdrop").addEventListener("click", closeLightbox);
+document.getElementById("mirrorPhoto").addEventListener("click", function () {
+  if (this.src) openLightbox(this.src);
+});
+document.getElementById("mirrorResult").addEventListener("click", function () {
+  if (this.src) openLightbox(this.src);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && lightbox.classList.contains("active")) closeLightbox();
+});
 
 // Clean up large base64 data on page unload
 window.addEventListener("unload", () => {
@@ -68,6 +98,9 @@ window.addEventListener("unload", () => {
   selectedTop = null;
   selectedBottom = null;
   selectedShoes = null;
+  selectedNecklace = null;
+  selectedEarrings = null;
+  selectedBracelet = null;
   selectedItem = null;
   if (timerInterval) clearInterval(timerInterval);
   if (tryOnTimerInterval) clearInterval(tryOnTimerInterval);
@@ -86,23 +119,43 @@ async function initWardrobe() {
 
   if (topQuery) {
     const topSizeStr = clothesSizeParam ? ` size ${clothesSizeParam}` : "";
-    promises.push(searchCategory("top", `${topQuery} ${sexSuffix}${topSizeStr}`));
+    const tq = /top|shirt|blouse|sweater|jacket|hoodie|t-shirt|tee|tank|polo|coat|blazer|cardigan|vest|tunic|crop/i.test(topQuery) ? topQuery : `${topQuery} top`;
+    promises.push(searchCategory("top", `${tq} ${sexSuffix}${topSizeStr}`));
   } else {
     updateCategoryStatus("top", "Skipped");
   }
 
   if (bottomQuery) {
     const bottomSizeStr = clothesSizeParam ? ` size ${clothesSizeParam}` : "";
-    promises.push(searchCategory("bottom", `${bottomQuery} ${sexSuffix}${bottomSizeStr}`));
+    const bq = /bottom|pants|jeans|shorts|skirt|trousers|leggings|joggers|chinos|slacks|capri/i.test(bottomQuery) ? bottomQuery : `${bottomQuery} pants`;
+    promises.push(searchCategory("bottom", `${bq} ${sexSuffix}${bottomSizeStr}`));
   } else {
     updateCategoryStatus("bottom", "Skipped");
   }
 
   if (shoesQuery) {
     const shoesSizeStr = shoesSizeParam ? ` size ${shoesSizeParam}` : "";
-    promises.push(searchCategory("shoes", `${shoesQuery} ${sexSuffix}${shoesSizeStr}`));
+    const sq = /shoes?|sneakers?|boots?|sandals?|heels?|flats?|loafers?|moccasins?|slippers?|pumps?|oxfords?/i.test(shoesQuery) ? shoesQuery : `${shoesQuery} shoes`;
+    promises.push(searchCategory("shoes", `${sq} ${sexSuffix}${shoesSizeStr}`));
   } else {
     updateCategoryStatus("shoes", "Skipped");
+  }
+
+  // Accessories (optional) — auto-prepend category name if not already in query
+  if (necklaceQuery) {
+    document.getElementById("loadingNecklace").hidden = false;
+    const nq = /necklace/i.test(necklaceQuery) ? necklaceQuery : `${necklaceQuery} necklace`;
+    promises.push(searchCategory("necklace", `${nq} ${sexSuffix}`));
+  }
+  if (earringsQuery) {
+    document.getElementById("loadingEarrings").hidden = false;
+    const eq = /earrings?/i.test(earringsQuery) ? earringsQuery : `${earringsQuery} earrings`;
+    promises.push(searchCategory("earrings", `${eq} ${sexSuffix}`));
+  }
+  if (braceletsQuery) {
+    document.getElementById("loadingBracelets").hidden = false;
+    const bq = /bracelets?/i.test(braceletsQuery) ? braceletsQuery : `${braceletsQuery} bracelet`;
+    promises.push(searchCategory("bracelets", `${bq} ${sexSuffix}`));
   }
 
   // Fetch user photo in parallel
@@ -138,10 +191,24 @@ async function searchCategory(category, query) {
       p._category = category;
     });
 
+    // Accessories: skip background removal, smaller batch
+    const isAccessory = ["necklace", "earrings", "bracelets"].includes(category);
+
     // Remove backgrounds from product images using Gemini
     // Process in batches of 3 to avoid API rate limiting
-    const maxItems = category === "shoes" ? 7 : 20;
+    const maxItems = isAccessory ? 5 : (category === "shoes" ? 7 : 20);
     const items = products.slice(0, maxItems);
+
+    // Skip background removal for accessories — not needed for small jewelry images
+    if (isAccessory) {
+      updateCategoryStatus(category, items.length + " ready");
+      renderCategory(category, products);
+      // Show the accessory bar (shared container for all 3 categories)
+      document.getElementById("accessoryBar").hidden = false;
+      document.getElementById("closetCeiling").classList.add("has-accessories");
+      return;
+    }
+
     const BATCH_SIZE = 3;
     let bgSuccessCount = 0;
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
@@ -205,35 +272,39 @@ async function loadUserPhoto() {
 // Rendering
 // ---------------------------------------------------------------------------
 function renderCategory(category, products) {
-  let containerId, maxItems;
-  if (category === "top") {
-    containerId = "topsContainer";
-    maxItems = 20;
-  } else if (category === "bottom") {
-    containerId = "bottomsContainer";
-    maxItems = 20;
-  } else {
-    containerId = "shoesContainer";
-    maxItems = 7;
-  }
+  const containerMap = {
+    top: "topsContainer",
+    bottom: "bottomsContainer",
+    shoes: "shoesContainer",
+    necklace: "necklaceContainer",
+    earrings: "earringsContainer",
+    bracelets: "braceletsContainer",
+  };
+  const maxMap = { top: 20, bottom: 20, shoes: 7, necklace: 5, earrings: 5, bracelets: 5 };
+  const containerId = containerMap[category] || "topsContainer";
+  const maxItems = maxMap[category] || 20;
 
   const container = document.getElementById(containerId);
   container.innerHTML = "";
 
   const items = products.slice(0, maxItems);
+  const isAccessory = ["necklace", "earrings", "bracelets"].includes(category);
 
-  items.forEach((product) => {
-    if (category === "shoes") {
-      container.appendChild(createShoeItem(product));
+  items.forEach((product, idx) => {
+    if (isAccessory) {
+      container.appendChild(createAccessoryItem(product, idx + 1));
+    } else if (category === "shoes") {
+      container.appendChild(createShoeItem(product, idx + 1));
     } else {
-      container.appendChild(createHangerItem(product));
+      container.appendChild(createHangerItem(product, idx + 1));
     }
   });
 }
 
-function createHangerItem(product) {
+function createHangerItem(product, displayNumber) {
   const wrapper = document.createElement("div");
   wrapper.className = "hanger-item";
+  wrapper._productData = product;
   wrapper.addEventListener("click", () => selectItem(product, wrapper));
 
   // Hanger
@@ -253,6 +324,16 @@ function createHangerItem(product) {
   // Clothing item card
   const card = document.createElement("div");
   card.className = "clothing-item";
+  const tooltipText = (product.title || "Item") + (product.price ? ` — ${product.price}` : "");
+  card.title = tooltipText;
+
+  // Number badge
+  if (displayNumber) {
+    const numberBadge = document.createElement("div");
+    numberBadge.className = "item-number-badge";
+    numberBadge.textContent = displayNumber;
+    card.appendChild(numberBadge);
+  }
 
   const img = document.createElement("img");
   img.src = product._noBgImage || product.image_url || "";
@@ -288,13 +369,24 @@ function createHangerItem(product) {
   return wrapper;
 }
 
-function createShoeItem(product) {
+function createShoeItem(product, displayNumber) {
   const wrapper = document.createElement("div");
   wrapper.className = "shoe-display";
+  wrapper._productData = product;
   wrapper.addEventListener("click", () => selectItem(product, wrapper));
 
   const item = document.createElement("div");
   item.className = "shoe-item";
+  const tooltipText = (product.title || "Shoes") + (product.price ? ` — ${product.price}` : "");
+  wrapper.title = tooltipText;
+
+  // Number badge
+  if (displayNumber) {
+    const numberBadge = document.createElement("div");
+    numberBadge.className = "item-number-badge shoe-number-badge";
+    numberBadge.textContent = displayNumber;
+    wrapper.appendChild(numberBadge);
+  }
 
   const img = document.createElement("img");
   img.src = product._noBgImage || product.image_url || "";
@@ -311,11 +403,62 @@ function createShoeItem(product) {
 
   wrapper.appendChild(item);
 
+  // Price badge for shoes
+  if (product.price) {
+    const price = document.createElement("div");
+    price.className = "shoe-price";
+    price.textContent = product.price;
+    wrapper.appendChild(price);
+  }
+
   const title = document.createElement("div");
   title.className = "shoe-title";
   title.textContent = product.title
     ? product.title.split(" ").slice(0, 3).join(" ")
     : "Shoes";
+  wrapper.appendChild(title);
+
+  return wrapper;
+}
+
+function createAccessoryItem(product, displayNumber) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "accessory-item";
+  wrapper._productData = product;
+  wrapper.addEventListener("click", () => selectItem(product, wrapper));
+  wrapper.title = (product.title || "Accessory") + (product.price ? ` — ${product.price}` : "");
+
+  // Number badge
+  if (displayNumber) {
+    const badge = document.createElement("div");
+    badge.className = "accessory-number-badge";
+    badge.textContent = displayNumber;
+    wrapper.appendChild(badge);
+  }
+
+  // Image container
+  const imgContainer = document.createElement("div");
+  imgContainer.className = "accessory-item-img";
+  const img = document.createElement("img");
+  img.src = product.image_url || "";
+  img.alt = product.title || "";
+  img.loading = "lazy";
+  img.addEventListener("error", function () { this.style.display = "none"; });
+  imgContainer.appendChild(img);
+  wrapper.appendChild(imgContainer);
+
+  // Price badge
+  if (product.price) {
+    const price = document.createElement("div");
+    price.className = "accessory-item-price";
+    price.textContent = product.price;
+    wrapper.appendChild(price);
+  }
+
+  // Title
+  const title = document.createElement("div");
+  title.className = "accessory-item-title";
+  title.textContent = product.title ? product.title.split(" ").slice(0, 3).join(" ") : "Accessory";
   wrapper.appendChild(title);
 
   return wrapper;
@@ -328,10 +471,10 @@ function selectItem(product, element) {
   const category = product._category;
 
   // Remove previous selection in SAME category only
-  const containerMap = { top: "topsContainer", bottom: "bottomsContainer", shoes: "shoesContainer" };
+  const containerMap = { top: "topsContainer", bottom: "bottomsContainer", shoes: "shoesContainer", necklace: "necklaceContainer", earrings: "earringsContainer", bracelets: "braceletsContainer" };
   const container = document.getElementById(containerMap[category]);
   if (container) {
-    container.querySelectorAll(".hanger-item.selected, .shoe-display.selected")
+    container.querySelectorAll(".hanger-item.selected, .shoe-display.selected, .accessory-item.selected")
       .forEach((el) => el.classList.remove("selected"));
   }
 
@@ -342,6 +485,9 @@ function selectItem(product, element) {
   if (category === "top") selectedTop = product;
   else if (category === "bottom") selectedBottom = product;
   else if (category === "shoes") selectedShoes = product;
+  else if (category === "necklace") selectedNecklace = product;
+  else if (category === "earrings") selectedEarrings = product;
+  else if (category === "bracelets") selectedBracelet = product;
 
   selectedItem = product;
 
@@ -351,8 +497,20 @@ function selectItem(product, element) {
   if (selectedTop) parts.push("Top: " + (selectedTop.title || "Item").split(" ").slice(0, 3).join(" "));
   if (selectedBottom) parts.push("Bottom: " + (selectedBottom.title || "Item").split(" ").slice(0, 3).join(" "));
   if (selectedShoes) parts.push("Shoes: " + (selectedShoes.title || "Item").split(" ").slice(0, 3).join(" "));
+  if (selectedNecklace) parts.push("Necklace");
+  if (selectedEarrings) parts.push("Earrings");
+  if (selectedBracelet) parts.push("Bracelet");
   document.getElementById("selectedName").textContent = parts.join(" | ");
-  document.getElementById("selectedPrice").textContent = product.price || "";
+
+  // Calculate total price of all selected items
+  let totalPrice = 0;
+  [selectedTop, selectedBottom, selectedShoes, selectedNecklace, selectedEarrings, selectedBracelet].forEach(item => {
+    if (item && item.price) {
+      const num = parseFloat(item.price.replace(/[^0-9.]/g, ""));
+      if (!isNaN(num)) totalPrice += num;
+    }
+  });
+  document.getElementById("selectedPrice").textContent = totalPrice > 0 ? `Total: $${totalPrice.toFixed(2)}` : "";
 
   // Check if Try On should be enabled:
   // Must have both top AND bottom selected, plus shoes if shoes category is present
@@ -360,10 +518,9 @@ function selectItem(product, element) {
   const canTryOn = selectedTop && selectedBottom && (!needShoes || selectedShoes);
   document.getElementById("tryOnBtn").disabled = !canTryOn;
 
-  // Show buy link for last selected
-  if (product.product_url) {
-    const buyBtn = document.getElementById("buyBtn");
-    buyBtn.href = product.product_url;
+  // Show buy button when at least one item is selected
+  const buyBtn = document.getElementById("buyBtn");
+  if (selectedTop || selectedBottom || selectedShoes || selectedNecklace || selectedEarrings || selectedBracelet) {
     buyBtn.hidden = false;
   }
 
@@ -376,7 +533,7 @@ function selectItem(product, element) {
     showUserPhoto(userPosePhoto);
   }
 
-  // Hide favorite and animate buttons when new selection changes
+  // Hide favorite button when new selection changes
   document.getElementById("favoriteBtn").hidden = true;
   document.getElementById("animateBtn").hidden = true;
   lastTryOnResultBase64 = null;
@@ -433,11 +590,14 @@ async function handleTryOn() {
       selectedPoseIndex = photos.selectedPoseIndex || 0;
     }
 
-    // Build the list of garments to try on
+    // Build the list of garments to try on (clothing + accessories)
     const garmentItems = [];
     if (selectedTop) garmentItems.push({ item: selectedTop, garmentClass: "UPPER_BODY", label: "upper wear" });
     if (selectedBottom) garmentItems.push({ item: selectedBottom, garmentClass: "LOWER_BODY", label: "lower wear" });
     if (selectedShoes) garmentItems.push({ item: selectedShoes, garmentClass: "SHOES", label: "shoes" });
+    if (selectedNecklace) garmentItems.push({ item: selectedNecklace, garmentClass: "NECKLACE", label: "necklace" });
+    if (selectedEarrings) garmentItems.push({ item: selectedEarrings, garmentClass: "EARRINGS", label: "earrings" });
+    if (selectedBracelet) garmentItems.push({ item: selectedBracelet, garmentClass: "BRACELET", label: "bracelet" });
 
     // Fetch ALL garment images in parallel
     updateTryOnStatus(`Fetching ${garmentItems.length} garment images...`);
@@ -484,13 +644,12 @@ async function handleTryOn() {
     showTryOnResult(result.resultImage);
     console.log(`[Wardrobe] Outfit try-on complete! (${result.totalTime || "?"})`);
 
-    // Show Save to Favorites button
+    // Show Save to Favorites + Animate buttons
     const favBtn = document.getElementById("favoriteBtn");
     favBtn.hidden = false;
     favBtn.innerHTML = "&#9825; Save to Favorites";
     favBtn.classList.remove("vw-btn-favorite--saved");
 
-    // Show Animate button
     const animBtn = document.getElementById("animateBtn");
     animBtn.hidden = false;
     animBtn.innerHTML = "&#9654; Animate";
@@ -511,6 +670,39 @@ async function handleTryOn() {
     const canTryOn = selectedTop && selectedBottom && (!needShoes || selectedShoes);
     btn.disabled = !canTryOn;
     btn.innerHTML = "&#10024; Try On";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Buy on Amazon — add all selected items to cart in one click
+// ---------------------------------------------------------------------------
+function handleBuyOnAmazon() {
+  const items = [selectedTop, selectedBottom, selectedShoes, selectedNecklace, selectedEarrings, selectedBracelet].filter(Boolean);
+  if (items.length === 0) return;
+
+  // Extract ASINs from product URLs or item data
+  const asins = items.map(item => {
+    if (item.asin) return item.asin;
+    if (item.productId) return item.productId;
+    const url = item.product_url || "";
+    const match = url.match(/\/(?:dp|gp\/product)\/([A-Za-z0-9]{10})/);
+    if (match) return match[1];
+    const asinParam = url.match(/[?&]asin=([A-Za-z0-9]{10})/i);
+    return asinParam ? asinParam[1] : null;
+  }).filter(Boolean);
+
+  console.log("[Wardrobe] Add to cart — items:", items.length, "ASINs:", asins);
+
+  if (asins.length > 0) {
+    const params = asins.map((asin, i) => `ASIN.${i + 1}=${asin}&Quantity.${i + 1}=1`).join("&");
+    const cartUrl = `https://www.amazon.com/gp/aws/cart/add.html?${params}`;
+    console.log("[Wardrobe] Cart URL:", cartUrl);
+    window.open(cartUrl, "_blank");
+  } else {
+    console.warn("[Wardrobe] No ASINs found, opening product pages instead");
+    items.forEach(item => {
+      if (item.product_url) window.open(item.product_url, "_blank");
+    });
   }
 }
 
@@ -536,6 +728,9 @@ async function handleSaveFavorite() {
     if (selectedTop) outfitItems.push({ item: selectedTop, category: "top", garmentClass: "UPPER_BODY" });
     if (selectedBottom) outfitItems.push({ item: selectedBottom, category: "bottom", garmentClass: "LOWER_BODY" });
     if (selectedShoes) outfitItems.push({ item: selectedShoes, category: "shoes", garmentClass: "SHOES" });
+    if (selectedNecklace) outfitItems.push({ item: selectedNecklace, category: "necklace", garmentClass: "ACCESSORY" });
+    if (selectedEarrings) outfitItems.push({ item: selectedEarrings, category: "earrings", garmentClass: "ACCESSORY" });
+    if (selectedBracelet) outfitItems.push({ item: selectedBracelet, category: "bracelet", garmentClass: "ACCESSORY" });
 
     // Shared outfitId links all items together
     const outfitId = "outfit_" + Date.now();
@@ -545,7 +740,7 @@ async function handleSaveFavorite() {
     // Save each item (all share the same try-on result image and outfitId)
     for (const { item, category, garmentClass } of outfitItems) {
       const asinMatch = (item.product_url || "").match(/\/dp\/([A-Z0-9]{10})/);
-      const productId = asinMatch ? asinMatch[1] : "";
+      const productId = asinMatch ? asinMatch[1] : item.productId || "";
       if (!productId) continue;
 
       console.log(`[Wardrobe]   saving ${category}: productId=${productId}`);
@@ -555,10 +750,10 @@ async function handleSaveFavorite() {
         endpoint: "/api/favorites",
         method: "POST",
         data: {
-          productId,
-          retailer: "amazon",
+          asin: productId,
           productTitle: item.title || "",
           productImage: item.image_url || "",
+          productUrl: item.product_url || "",
           category,
           garmentClass,
           tryOnResultImage: resultImage,
@@ -587,10 +782,18 @@ function showWardrobe() {
   document.getElementById("loadingOverlay").hidden = true;
   document.getElementById("closetRoom").hidden = false;
   document.getElementById("shoeRackContainer").hidden = false;
+  // Adjust padding-top to account for the accessories ceiling height
+  const ceiling = document.getElementById("closetCeiling");
+  if (ceiling.classList.contains("has-accessories")) {
+    requestAnimationFrame(() => {
+      const ceilingHeight = ceiling.offsetHeight;
+      document.getElementById("closetRoom").style.paddingTop = (ceilingHeight + 8) + "px";
+    });
+  }
 }
 
 function updateCategoryStatus(category, status) {
-  const map = { top: "loadingTopStatus", bottom: "loadingBottomStatus", shoes: "loadingShoesStatus" };
+  const map = { top: "loadingTopStatus", bottom: "loadingBottomStatus", shoes: "loadingShoesStatus", necklace: "loadingNecklaceStatus", earrings: "loadingEarringsStatus", bracelets: "loadingBraceletsStatus" };
   const el = document.getElementById(map[category]);
   if (el) el.textContent = status;
 }
@@ -694,20 +897,17 @@ function resizeImageBase64(base64, minDim = 320, maxDim = 4096) {
 }
 
 // ---------------------------------------------------------------------------
-// Video Animation
+// Animate — generate video from try-on result
 // ---------------------------------------------------------------------------
-async function handleAnimateOutfit() {
-  if (!lastTryOnResultBase64 || animating) return;
-
-  animating = true;
+async function handleAnimate() {
+  if (!lastTryOnResultBase64) return;
   const btn = document.getElementById("animateBtn");
   btn.disabled = true;
   btn.textContent = "Generating video... 0s";
 
   const videoStart = Date.now();
   const videoTimerInterval = setInterval(() => {
-    const elapsed = ((Date.now() - videoStart) / 1000).toFixed(0);
-    btn.textContent = `Generating video... ${elapsed}s`;
+    btn.textContent = "Generating video... " + ((Date.now() - videoStart) / 1000).toFixed(0) + "s";
   }, 1000);
 
   try {
@@ -719,164 +919,101 @@ async function handleAnimateOutfit() {
 
     const response = await sendMessage({ type: "GENERATE_VIDEO", imageBase64 });
     const jobId = response.jobId;
-    const videoProvider = response.provider || "grok";
+    const provider = response.provider || "grok";
 
-    // Poll for video completion
-    const videoResult = await pollVideoStatus(jobId, videoProvider);
+    // Poll for completion
+    const MAX_POLLS = 60;
+    let videoResult;
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const status = await sendMessage({ type: "GET_VIDEO_STATUS", jobId, provider });
+      if ((status.status === "Completed" || status.status === "COMPLETED") && (status.videoUrl || status.videoBase64)) {
+        videoResult = status;
+        break;
+      }
+      if (status.status === "Failed" || status.status === "FAILED") {
+        throw new Error(status.failureMessage || "Video generation failed");
+      }
+    }
+    if (!videoResult) throw new Error("Video generation timed out");
 
     clearInterval(videoTimerInterval);
-    const videoElapsed = ((Date.now() - videoStart) / 1000).toFixed(1);
+    const elapsed = ((Date.now() - videoStart) / 1000).toFixed(1);
 
-    // Build video source
     const videoSrc = videoResult.videoBase64
-      ? `data:${videoResult.videoMimeType || "video/mp4"};base64,${videoResult.videoBase64}`
+      ? "data:" + (videoResult.videoMimeType || "video/mp4") + ";base64," + videoResult.videoBase64
       : videoResult.videoUrl;
 
-    // Show video in an overlay on top of the mirror
+    // Display video inside the mirror area, replacing the result image
     const mirrorContent = document.getElementById("mirrorContent");
-    const overlay = document.createElement("div");
-    overlay.id = "videoOverlay";
-    overlay.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;background:rgba(0,0,0,0.9);display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:8px;";
+    const mirrorPhoto = document.getElementById("mirrorPhoto");
+    const mirrorResult = document.getElementById("mirrorResult");
+    if (mirrorPhoto) mirrorPhoto.hidden = true;
+    if (mirrorResult) mirrorResult.hidden = true;
+
+    let videoContainer = document.getElementById("videoContainer");
+    if (videoContainer) videoContainer.remove();
+    videoContainer = document.createElement("div");
+    videoContainer.id = "videoContainer";
+    videoContainer.style.cssText = "width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;";
 
     const video = document.createElement("video");
     video.controls = true;
     video.autoplay = true;
     video.loop = true;
-    video.style.cssText = "max-width:95%;max-height:70%;border-radius:8px;";
-    const source = document.createElement("source");
-    source.src = videoSrc;
-    source.type = "video/mp4";
-    video.appendChild(source);
-    overlay.appendChild(video);
+    video.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:3px;";
+    video.innerHTML = '<source src="' + videoSrc + '" type="video/mp4" />';
+    videoContainer.appendChild(video);
+    mirrorContent.appendChild(videoContainer);
 
-    const actionsDiv = document.createElement("div");
-    actionsDiv.style.cssText = "margin-top:8px; display:flex; gap:8px; align-items:center;";
+    // Update Animate button to Save Video
+    btn.innerHTML = "&#128190; Save Video";
+    btn.disabled = false;
+    lastVideoSrc = videoSrc;
 
-    const elapsedSpan = document.createElement("span");
-    elapsedSpan.style.cssText = "font-size:11px; color:#aaa;";
-    elapsedSpan.textContent = `Generated in ${videoElapsed}s`;
-    actionsDiv.appendChild(elapsedSpan);
-
-    // Save button
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "vw-btn-tryon";
-    saveBtn.style.cssText = "font-size:12px; padding:4px 12px;";
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.textContent = "Saving...";
-      saveBtn.disabled = true;
+    // Replace click handler to save
+    btn.replaceWith(btn.cloneNode(true));
+    const newBtn = document.getElementById("animateBtn");
+    newBtn.innerHTML = "&#128190; Save Video";
+    newBtn.addEventListener("click", async () => {
+      newBtn.disabled = true;
+      newBtn.textContent = "Saving...";
       try {
-        const productId = selectedItem ? ((selectedItem.product_url || "").match(/\/dp\/([A-Z0-9]{10})/) || [])[1] || "" : "";
+        let videoBase64 = null;
+        let videoUrlForSave = null;
+        if (videoSrc.startsWith("data:")) {
+          videoBase64 = videoSrc.split(",")[1];
+        } else {
+          videoUrlForSave = videoSrc;
+        }
         await sendMessage({
           type: "API_CALL",
-          endpoint: "/api/video/save",
           method: "POST",
+          endpoint: "/api/video/save",
           data: {
-            videoUrl: videoResult.videoUrl || null,
-            videoBase64: videoResult.videoBase64 || null,
-            productId,
-            retailer: "amazon",
-            productTitle: selectedItem?.title || "",
-            productImage: selectedItem?.image_url || "",
+            videoBase64,
+            videoUrl: videoUrlForSave,
+            productTitle: [selectedTop, selectedBottom, selectedShoes].filter(Boolean).map(i => (i.title || "").split(" ").slice(0, 3).join(" ")).join(" + "),
           },
         });
-        saveBtn.textContent = "Saved!";
+        newBtn.innerHTML = "&#9989; Saved!";
+        showPageToast("Video saved!");
+        setTimeout(() => { newBtn.innerHTML = "&#9654; Animate"; }, 3000);
       } catch (err) {
-        console.error("[Wardrobe] Failed to save video:", err);
-        saveBtn.textContent = "Failed";
-        setTimeout(() => { saveBtn.textContent = "Save"; saveBtn.disabled = false; }, 2000);
+        console.error("[Wardrobe] Save video failed:", err);
+        newBtn.textContent = "Save failed";
+        setTimeout(() => { newBtn.innerHTML = "&#9654; Animate"; }, 2000);
+      } finally {
+        newBtn.disabled = false;
       }
     });
-    actionsDiv.appendChild(saveBtn);
-
-    // Download button
-    const downloadBtn = document.createElement("button");
-    downloadBtn.className = "vw-btn-tryon";
-    downloadBtn.style.cssText = "font-size:12px; padding:4px 12px;";
-    downloadBtn.textContent = "Download";
-    downloadBtn.addEventListener("click", async () => {
-      downloadBtn.textContent = "Downloading...";
-      downloadBtn.disabled = true;
-      try {
-        const resp = await fetch(videoSrc);
-        const blob = await resp.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = "tryon-video-" + Date.now() + ".mp4";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(blobUrl);
-        downloadBtn.textContent = "Download";
-        downloadBtn.disabled = false;
-      } catch (err) {
-        console.error("[Wardrobe] Download failed:", err);
-        downloadBtn.textContent = "Failed";
-        setTimeout(() => { downloadBtn.textContent = "Download"; downloadBtn.disabled = false; }, 2000);
-      }
-    });
-    actionsDiv.appendChild(downloadBtn);
-
-    // Close button
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "vw-btn-tryon";
-    closeBtn.style.cssText = "font-size:12px; padding:4px 12px;";
-    closeBtn.textContent = "Close";
-    closeBtn.addEventListener("click", () => {
-      overlay.remove();
-    });
-    actionsDiv.appendChild(closeBtn);
-
-    overlay.appendChild(actionsDiv);
-    mirrorContent.style.position = "relative";
-    mirrorContent.appendChild(overlay);
-
-    btn.innerHTML = "&#9654; Animate";
-    btn.disabled = false;
   } catch (err) {
     clearInterval(videoTimerInterval);
     console.error("[Wardrobe] Video generation failed:", err);
     btn.innerHTML = "&#9654; Animate";
     btn.disabled = false;
-    updateTryOnStatus("Video failed: " + err.message);
-    setTimeout(() => hideTryOnLoading(), 3000);
-  } finally {
-    animating = false;
+    showPageToast("Video failed: " + err.message);
   }
-}
-
-let _videoPollAbort = null;
-
-async function pollVideoStatus(jobId, provider) {
-  const MAX_POLLS = 40;
-  const BASE_INTERVAL = 3000;
-  const MAX_INTERVAL = 15000;
-
-  if (_videoPollAbort) _videoPollAbort.abort();
-  _videoPollAbort = new AbortController();
-  const signal = _videoPollAbort.signal;
-
-  for (let i = 0; i < MAX_POLLS; i++) {
-    const delay = Math.min(BASE_INTERVAL * Math.pow(1.5, i), MAX_INTERVAL);
-    await new Promise((r) => setTimeout(r, delay));
-
-    if (signal.aborted) throw new Error("Video polling aborted");
-
-    const status = await sendMessage({ type: "GET_VIDEO_STATUS", jobId, provider });
-
-    if ((status.status === "Completed" || status.status === "COMPLETED") && (status.videoUrl || status.videoBase64)) {
-      _videoPollAbort = null;
-      return status;
-    }
-    if (status.status === "Failed" || status.status === "FAILED") {
-      _videoPollAbort = null;
-      throw new Error(status.failureMessage || status.error || "Video generation failed");
-    }
-  }
-
-  _videoPollAbort = null;
-  throw new Error("Video generation timed out");
 }
 
 // ---------------------------------------------------------------------------

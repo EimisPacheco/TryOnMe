@@ -8,6 +8,28 @@ const PYTHON_SCRIPT = path.join(__dirname, "..", "python-services", "smart_searc
 const PYTHON_VENV = path.join(__dirname, "..", "python-services", "venv", "bin", "python3");
 const SEARCH_TIMEOUT = 180000; // 3 minutes max for Nova Act
 
+// Concurrency limiter — max 2 Playwright browsers at once to avoid OOM on Cloud Run
+const MAX_CONCURRENT = 2;
+let activeSearches = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  if (activeSearches < MAX_CONCURRENT) {
+    activeSearches++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waitQueue.push(resolve));
+}
+
+function releaseSlot() {
+  if (waitQueue.length > 0) {
+    const next = waitQueue.shift();
+    next(); // hand the slot to the next waiting request
+  } else {
+    activeSearches--;
+  }
+}
+
 router.post("/", optionalAuth, async (req, res, next) => {
   try {
     const { query } = req.body;
@@ -19,9 +41,15 @@ router.post("/", optionalAuth, async (req, res, next) => {
     console.log(`\n[smartSearch] ========== SMART SEARCH REQUEST ==========`);
     console.log(`[smartSearch] query: "${query}"`);
     console.log(`[smartSearch] authenticated: ${!!req.userId}`);
-    console.log(`[smartSearch] Spawning Python Nova Act process...`);
+    console.log(`[smartSearch] Spawning Python Nova Act process... (active: ${activeSearches}/${MAX_CONCURRENT}, queued: ${waitQueue.length})`);
 
-    const result = await runPythonSearch(query.trim());
+    await acquireSlot();
+    let result;
+    try {
+      result = await runPythonSearch(query.trim());
+    } finally {
+      releaseSlot();
+    }
 
     console.log(`[smartSearch] Results: ${result.products ? result.products.length : 0} products`);
     console.log(`[smartSearch] ========== SMART SEARCH COMPLETE ==========\n`);

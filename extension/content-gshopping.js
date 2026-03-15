@@ -271,16 +271,25 @@
     });
 
     // Explicit click handler for View Product — open via background script to bypass CSP
+    // Use capture phase so we fire BEFORE Google's jsaction event system intercepts
     const viewProductLink = lightbox.querySelector(".nova-gshopping-btn-link");
     if (viewProductLink) {
-      viewProductLink.addEventListener("click", (e) => {
+      viewProductLink.style.pointerEvents = "auto";
+      viewProductLink.style.position = "relative";
+      viewProductLink.style.zIndex = "2147483647";
+      const openProduct = (e) => {
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
         const url = viewProductLink.getAttribute("href") || viewProductLink.href;
         console.log("[GeminiTryOnMe] Opening product URL:", url);
-        chrome.runtime.sendMessage({ type: "OPEN_URL", url });
-      });
+        if (url) chrome.runtime.sendMessage({ type: "OPEN_URL", url });
+        return false;
+      };
+      viewProductLink.addEventListener("click", openProduct, true);
+      viewProductLink.addEventListener("mousedown", openProduct, true);
+      viewProductLink.addEventListener("pointerdown", openProduct, true);
+      viewProductLink.onclick = openProduct;
     }
 
     // Save to favorites
