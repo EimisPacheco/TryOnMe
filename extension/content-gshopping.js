@@ -81,15 +81,30 @@
   }
 
   function getCardLink(card) {
+    // Strategy 1: Check data attributes that Google Shopping uses for merchant URLs
+    const dataUrl = card.getAttribute("data-merchant-url") || card.getAttribute("data-offer-url") || card.getAttribute("data-url");
+    if (dataUrl && dataUrl.startsWith("http")) return dataUrl;
+
+    // Strategy 2: Find all links and prefer merchant links over Google internal links
+    const allLinks = Array.from(card.querySelectorAll("a[href]"));
+    for (const a of allLinks) {
+      const href = a.href;
+      try {
+        const u = new URL(href);
+        // Extract real URL from Google redirect (/url?url=... or /url?q=...)
+        const realUrl = u.searchParams.get("url") || u.searchParams.get("q");
+        if (realUrl && realUrl.startsWith("http")) return realUrl;
+        // Direct merchant link (not a google.com internal link)
+        if (!u.hostname.includes("google.com") && !u.hostname.includes("google.co") && href.startsWith("http")) {
+          return href;
+        }
+      } catch (_) {}
+    }
+
+    // Strategy 3: Fall back to first link's href
     const a = card.tagName === "A" ? card : card.querySelector("a[href]");
     if (!a) return null;
-    const href = a.href;
-    try {
-      const u = new URL(href);
-      const realUrl = u.searchParams.get("url") || u.searchParams.get("q");
-      if (realUrl && realUrl.startsWith("http")) return realUrl;
-    } catch (_) {}
-    return href;
+    return a.href;
   }
 
   function getCardProductId(card) {
@@ -283,7 +298,21 @@
         e.stopImmediatePropagation();
         const url = viewProductLink.getAttribute("href") || viewProductLink.href;
         console.log("[GeminiTryOnMe] Opening product URL:", url);
-        if (url) chrome.runtime.sendMessage({ type: "OPEN_URL", url });
+        if (url && url !== "null" && url !== "undefined") {
+          // Try background script first, then fallback to window.open
+          try {
+            chrome.runtime.sendMessage({ type: "OPEN_URL", url }, (resp) => {
+              if (chrome.runtime.lastError) {
+                console.warn("[GeminiTryOnMe] OPEN_URL failed, using window.open:", chrome.runtime.lastError);
+                window.open(url, "_blank", "noopener");
+              }
+            });
+          } catch (_) {
+            window.open(url, "_blank", "noopener");
+          }
+        } else {
+          console.warn("[GeminiTryOnMe] No product URL available");
+        }
         return false;
       };
       viewProductLink.addEventListener("click", openProduct, true);

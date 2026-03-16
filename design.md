@@ -466,8 +466,8 @@ test('image validation accepts valid images and rejects invalid ones', () => {
 - Node.js or Python for API services
 - TensorFlow or PyTorch for image processing and overlay generation
 - Redis for caching rendered results
-- PostgreSQL for user profile metadata
-- S3 or equivalent for encrypted image storage
+- Google Cloud Firestore for user profile metadata
+- Google Cloud Storage (GCS) for encrypted image storage
 
 **Infrastructure:**
 - CDN for static asset delivery (animations, cached previews)

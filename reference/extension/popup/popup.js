@@ -1623,7 +1623,7 @@ function initStella() {
   let socket = null;
   let mediaStream = null;
   let audioContext = null;
-  let processorNode = null;
+  let workletNode = null;
   let sourceNode = null;
   let playbackCtx = null;
   let playbackQueue = [];
@@ -1716,6 +1716,7 @@ function initStella() {
 
     socket.on('error', (data) => {
       console.error('[Stella] Error:', data.message);
+      toolBar.hidden = true;
       const isTimeout = data.message && data.message.toLowerCase().includes('timed out');
       if (isTimeout && isSessionActive) {
         appendTranscript('system', 'Connection hiccup — reconnecting...');
@@ -1743,11 +1744,11 @@ function initStella() {
   // Forward search/outfit results from extension tabs to voice socket
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'SEARCH_RESULTS_LOADED' && socket && socket.connected) {
-      socket.emit('searchResultsLoaded', { products: msg.products });
-      console.log('[Stella] Forwarded search results to voice session:', msg.products?.length);
+      socket.emit('searchResultsLoaded', { products: msg.products, screenshot: msg.screenshot || null });
+      console.log('[Stella] Forwarded search results to voice session:', msg.products?.length, 'screenshot:', !!msg.screenshot);
     }
     if (msg.type === 'OUTFIT_RESULTS_LOADED' && socket && socket.connected) {
-      socket.emit('outfitResultsLoaded', { tops: msg.tops, bottoms: msg.bottoms, shoes: msg.shoes });
+      socket.emit('outfitResultsLoaded', { tops: msg.tops, bottoms: msg.bottoms, shoes: msg.shoes, necklaces: msg.necklaces, earrings: msg.earrings, bracelets: msg.bracelets });
       console.log('[Stella] Forwarded outfit results to voice session');
     }
   });
@@ -1758,29 +1759,24 @@ function initStella() {
       audio: { sampleRate: INPUT_SAMPLE_RATE, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     audioContext = new AudioContext({ sampleRate: INPUT_SAMPLE_RATE });
+    await audioContext.audioWorklet.addModule('audio-processor.js');
     sourceNode = audioContext.createMediaStreamSource(mediaStream);
-    processorNode = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
+    workletNode = new AudioWorkletNode(audioContext, 'audio-capture-processor');
 
-    processorNode.onaudioprocess = (e) => {
+    workletNode.port.onmessage = (e) => {
       if (!isSessionActive || !socket) return;
-      const float32 = e.inputBuffer.getChannelData(0);
-      const int16 = new Int16Array(float32.length);
-      for (let i = 0; i < float32.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32[i]));
-        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      const bytes = new Uint8Array(int16.buffer);
+      const bytes = new Uint8Array(e.data);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
       socket.emit('audioInput', btoa(binary));
     };
 
-    sourceNode.connect(processorNode);
-    processorNode.connect(audioContext.destination);
+    sourceNode.connect(workletNode);
+    workletNode.connect(audioContext.destination);
   }
 
   function stopAudioCapture() {
-    if (processorNode) { processorNode.disconnect(); processorNode = null; }
+    if (workletNode) { workletNode.disconnect(); workletNode = null; }
     if (sourceNode) { sourceNode.disconnect(); sourceNode = null; }
     if (audioContext) { audioContext.close(); audioContext = null; }
     if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
@@ -1902,10 +1898,14 @@ function initStella() {
 
   // Tool action handler
   function handleToolAction(data) {
+    // Acknowledge the tool action so the voice agent knows we received it
+    if (socket && socket.connected) {
+      socket.emit('toolAck', { action: data.action, acknowledged: true });
+    }
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       switch (data.action) {
         case 'smart_search':
-          chrome.runtime.sendMessage({ type: 'VOICE_SMART_SEARCH', query: data.query });
+          chrome.runtime.sendMessage({ type: 'VOICE_SMART_SEARCH', query: data.query, sex: data.sex, clothesSize: data.clothesSize, shoesSize: data.shoesSize });
           appendTranscript('system', 'Searching: "' + data.query + '"');
           break;
         case 'try_on':
@@ -1928,9 +1928,19 @@ function initStella() {
           chrome.runtime.sendMessage({ type: 'VOICE_SAVE_VIDEO' });
           appendTranscript('system', 'Saving video...');
           break;
-        case 'animate_tryon':
-          chrome.runtime.sendMessage({ type: 'VOICE_ANIMATE' });
+        case 'animate_tryon': {
+          const traceId = 'anim_' + Date.now();
+          console.log(`%c[ANIMATE TRACE ${traceId}] Step 1/4: popup.js received animate_tryon toolAction`, 'color: #FF6600; font-weight: bold; font-size: 14px');
+          console.log(`[ANIMATE TRACE ${traceId}] Sending VOICE_ANIMATE to background.js now...`);
+          chrome.runtime.sendMessage({ type: 'VOICE_ANIMATE', traceId }, (resp) => {
+            console.log(`%c[ANIMATE TRACE ${traceId}] Step 1/4 RESPONSE from background: ${JSON.stringify(resp)}`, 'color: #FF6600; font-weight: bold');
+            if (chrome.runtime.lastError) {
+              console.error(`[ANIMATE TRACE ${traceId}] chrome.runtime.lastError:`, chrome.runtime.lastError.message);
+            }
+          });
           appendTranscript('system', 'Generating animation...');
+          break;
+        }
           break;
         case 'download':
           chrome.runtime.sendMessage({ type: 'VOICE_DOWNLOAD', downloadType: data.downloadType || 'image' });
@@ -1950,12 +1960,18 @@ function initStella() {
             topNumber: data.topNumber || null,
             bottomNumber: data.bottomNumber || null,
             shoesNumber: data.shoesNumber || null,
+            necklaceNumber: data.necklaceNumber || null,
+            earringsNumber: data.earringsNumber || null,
+            braceletsNumber: data.braceletsNumber || null,
           });
           {
             const selParts = [];
             if (data.topNumber) selParts.push('top #' + data.topNumber);
             if (data.bottomNumber) selParts.push('bottom #' + data.bottomNumber);
             if (data.shoesNumber) selParts.push('shoes #' + data.shoesNumber);
+            if (data.necklaceNumber) selParts.push('necklace #' + data.necklaceNumber);
+            if (data.earringsNumber) selParts.push('earrings #' + data.earringsNumber);
+            if (data.braceletsNumber) selParts.push('bracelets #' + data.braceletsNumber);
             appendTranscript('system', 'Selecting ' + selParts.join(', ') + ' for try-on...');
           }
           break;

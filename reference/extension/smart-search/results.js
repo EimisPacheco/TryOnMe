@@ -19,6 +19,8 @@ let tryOnTimerInterval = null;
 let tryOnStartTime = 0;
 let currentPoseIndex = 0;
 let currentFraming = 'full';
+let lastTryOnResult = null; // { base64Image, product } — stored after successful try-on
+let pendingAnimateAfterTryOn = false; // if voice requests animate while try-on is still running
 
 // ---------------------------------------------------------------------------
 // Init
@@ -179,18 +181,27 @@ function renderResults(products, elapsedSeconds) {
     grid.appendChild(createProductCard(product, index));
   });
 
-  // Send product data to voice agent for visual recommendations
+  // Send product data + screenshot to voice agent for visual recommendations
   try {
-    chrome.runtime.sendMessage({
-      type: "SEARCH_RESULTS_LOADED",
-      products: products.slice(0, 20).map((p, i) => ({
-        number: i + 1,
-        title: p.title || "",
-        imageUrl: p.image_url || "",
-        price: p.price || "",
-        rating: p.rating || "",
-      })),
-    });
+    const productData = products.slice(0, 20).map((p, i) => ({
+      number: i + 1,
+      title: p.title || "",
+      imageUrl: p.image_url || "",
+      productUrl: p.product_url || "",
+      price: p.price || "",
+      rating: p.rating || "",
+      reviewCount: p.review_count || "",
+    }));
+    // Capture a screenshot of the results page after images load
+    setTimeout(() => {
+      chrome.runtime.sendMessage({ type: "CAPTURE_TAB_SCREENSHOT" }, (screenshotDataUrl) => {
+        chrome.runtime.sendMessage({
+          type: "SEARCH_RESULTS_LOADED",
+          products: productData,
+          screenshot: screenshotDataUrl || null,
+        });
+      });
+    }, 1500); // wait for product images to render
   } catch (_) { /* popup may not be open */ }
 }
 
@@ -470,6 +481,19 @@ async function handleTryOn(index) {
       }
       showTryOnResult(resultImage, product);
 
+      // Store for voice-triggered animate
+      lastTryOnResult = { base64Image: resultImage, product };
+
+      // If voice requested animate while try-on was still running, trigger it now
+      if (pendingAnimateAfterTryOn) {
+        pendingAnimateAfterTryOn = false;
+        console.log("[SmartSearch] Auto-triggering pending animate after try-on completed");
+        const animBtn = document.querySelector(".nova-btn-animate");
+        if (animBtn && !animBtn.disabled) {
+          animBtn.click();
+        }
+      }
+
       // Store lastTryOn so voice "save favorite" picks up the correct result
       const asinMatch = (product.product_url || "").match(/\/dp\/([A-Z0-9]{10})/);
       const productId = asinMatch ? asinMatch[1] : product.asin || "";
@@ -598,6 +622,11 @@ function showTryOnResult(base64Image, product) {
 // Animate — generate video from try-on result
 // ---------------------------------------------------------------------------
 async function handleAnimateResult(body, base64Image, btn, product) {
+  console.log("[SmartSearch] handleAnimateResult CALLED");
+  console.log("[SmartSearch]   body:", !!body);
+  console.log("[SmartSearch]   base64Image length:", base64Image?.length || 0);
+  console.log("[SmartSearch]   btn:", !!btn);
+  console.log("[SmartSearch]   product:", product?.title || "none");
   btn.disabled = true;
   btn.textContent = "Generating video... 0s";
 
@@ -687,6 +716,19 @@ async function handleAnimateResult(body, base64Image, btn, product) {
 
     videoContainer.appendChild(btnRow);
     body.appendChild(videoContainer);
+
+    // Store last video context for voice "save video" command
+    chrome.storage.local.set({
+      lastVideo: {
+        videoUrl: videoSrc.startsWith("data:") ? null : videoSrc,
+        videoBase64: videoSrc.startsWith("data:") ? videoSrc.split(",")[1] : null,
+        productId: product.productId || product.asin || "",
+        productTitle: product.title || "",
+        productImage: product.image_url || "",
+        timestamp: Date.now(),
+      }
+    });
+
     btn.innerHTML = "&#9654; Animate";
     btn.disabled = false;
   } catch (err) {
@@ -736,5 +778,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       console.warn("[SmartSearch] Invalid item number:", message.number);
       sendResponse({ error: "Item number " + message.number + " not found" });
     }
+    return true;
+  }
+  if (message.type === "VOICE_CLICK_ANIMATE") {
+    console.log("[SmartSearch] VOICE_CLICK_ANIMATE received");
+    console.log("[SmartSearch]   lastTryOnResult:", !!lastTryOnResult);
+    console.log("[SmartSearch]   lastTryOnResult.base64Image length:", lastTryOnResult?.base64Image?.length || 0);
+    console.log("[SmartSearch]   lastTryOnResult.product:", lastTryOnResult?.product?.title || "none");
+    const body = document.getElementById("tryOnModalBody");
+    const animBtn = document.querySelector(".nova-btn-animate");
+    console.log("[SmartSearch]   tryOnModalBody found:", !!body);
+    console.log("[SmartSearch]   .nova-btn-animate found:", !!animBtn, "disabled:", animBtn?.disabled);
+    if (lastTryOnResult) {
+      if (body && animBtn && !animBtn.disabled) {
+        console.log("[SmartSearch] >>> Calling handleAnimateResult NOW");
+        handleAnimateResult(body, lastTryOnResult.base64Image, animBtn, lastTryOnResult.product);
+        sendResponse({ clicked: true, status: "animating" });
+      } else {
+        console.log("[SmartSearch] Button not ready or missing, queuing for later");
+        pendingAnimateAfterTryOn = true;
+        sendResponse({ clicked: true, status: "queued" });
+      }
+    } else {
+      console.log("[SmartSearch] No try-on result yet, queuing for later");
+      pendingAnimateAfterTryOn = true;
+      sendResponse({ clicked: true, status: "queued_no_result" });
+    }
+    return true;
   }
 });

@@ -810,6 +810,19 @@ async function showVideosView() {
       const title = video.productTitle || (video.productId || video.asin) || 'Try-on video';
       const shortTitle = title.split(' ').slice(0, 5).join(' ');
 
+      // Build outfit items links HTML if available
+      const outfitLinksHtml = (video.outfitItems && video.outfitItems.length > 0)
+        ? `<div class="video-card-outfit-items">${video.outfitItems.map(item => {
+            const label = item.category ? item.category.charAt(0).toUpperCase() + item.category.slice(1) : 'Item';
+            const shortName = (item.title || '').split(' ').slice(0, 4).join(' ') || label;
+            const price = item.price ? ` ${item.price}` : '';
+            if (item.productUrl) {
+              return `<a class="video-outfit-link" href="${item.productUrl}" target="_blank" title="${item.title || ''}">${shortName}${price}</a>`;
+            }
+            return `<span class="video-outfit-link">${shortName}${price}</span>`;
+          }).join('')}</div>`
+        : '';
+
       card.innerHTML = `
         <div class="video-card-player">
           ${video.videoUrl ? `<video class="video-card-video" controls preload="metadata"><source src="${video.videoUrl}" type="video/mp4"></video>` : '<div class="video-card-placeholder">Video unavailable</div>'}
@@ -822,6 +835,7 @@ async function showVideosView() {
               <div class="video-card-meta">${date}</div>
             </div>
           </div>
+          ${outfitLinksHtml}
           <div class="video-card-actions">
             ${(video.productId || video.asin) ? `<a class="video-card-link" href="#" data-product-id="${video.productId || video.asin}" data-retailer="${video.retailer || 'amazon'}">View Product</a>` : ''}
             <button class="video-card-delete" title="Remove video" data-video-id="${video.videoId}">&times;</button>
@@ -878,6 +892,7 @@ async function showEditProfile() {
     document.getElementById('editCity').value = cachedProfile.city || '';
     document.getElementById('editClothesSize').value = cachedProfile.clothesSize || '';
     document.getElementById('editShoesSize').value = cachedProfile.shoesSize || '';
+    document.getElementById('editLanguage').value = cachedProfile.language || 'en';
     if (cachedProfile.birthday) {
       const age = calculateAge(cachedProfile.birthday);
       document.getElementById('editAgeDisplay').textContent = age > 0 ? `Age: ${age}` : '';
@@ -917,6 +932,7 @@ async function handleEditSaveInfo() {
   const city = document.getElementById('editCity').value.trim();
   const clothesSize = document.getElementById('editClothesSize').value;
   const shoesSize = document.getElementById('editShoesSize').value;
+  const language = document.getElementById('editLanguage')?.value || 'en';
 
   if (!firstName || !lastName) {
     showToast('Please enter your first and last name.');
@@ -927,7 +943,7 @@ async function handleEditSaveInfo() {
   try {
     await sendMsg({
       type: 'API_CALL', endpoint: '/api/profile', method: 'PUT',
-      data: { firstName, lastName, birthday, sex, country, city, clothesSize, shoesSize }
+      data: { firstName, lastName, birthday, sex, country, city, clothesSize, shoesSize, language }
     });
     showToast('Profile updated successfully');
   } catch (err) {
@@ -945,7 +961,7 @@ async function handleEditRegenAiPhotos() {
   statusEl.textContent = 'Fetching your original photos...';
 
   try {
-    // Fetch current originals from S3 (same data showEditProfile already loads)
+    // Fetch current originals from GCS (same data showEditProfile already loads)
     const allPhotos = await sendMsg({
       type: 'API_CALL', endpoint: '/api/profile/photos/all', method: 'GET', data: {}
     });
@@ -1036,10 +1052,12 @@ async function handleWizard1Next() {
     return;
   }
 
+  const language = document.getElementById('language')?.value || 'en';
+
   try {
     await sendMsg({
       type: 'API_CALL', endpoint: '/api/profile', method: 'PUT',
-      data: { firstName, lastName, birthday, sex, country, city, clothesSize, shoesSize }
+      data: { firstName, lastName, birthday, sex, country, city, clothesSize, shoesSize, language }
     });
     // Open as a full tab for photo upload (popup closes when file dialogs open)
     openAsTab('wizard2');
@@ -1156,7 +1174,7 @@ async function handleWizard2Next() {
     }
 
     // Store first generated photo for backward compat + reset pose selection
-    // Actual pose images are fetched from S3 by the backend using poseIndex
+    // Actual pose images are fetched from GCS by the backend using poseIndex
     if (result.generatedPhotos && result.generatedPhotos[0]) {
       await chrome.storage.local.set({
         bodyPhoto: result.generatedPhotos[0],
@@ -1559,6 +1577,12 @@ document.addEventListener('DOMContentLoaded', init);
   let audioQueue = [];
   let nextPlayTime = 0;
   let currentOutputMsg = null; // accumulates output transcription
+  let currentInputMsg = null;  // accumulates input transcription
+  let reconnectAttempted = false; // prevent infinite reconnect loops
+  let resumptionHandle = null; // Gemini session resumption handle for seamless reconnect
+  let cachedSearchScreenshot = null; // screenshot of smart search results for vision
+  let cachedSearchProducts = null; // product data from smart search results
+  let recentTranscripts = []; // last few transcripts for extracting accessory mentions
 
   // Get WebSocket URL from backend URL
   async function getWsUrl() {
@@ -1624,15 +1648,21 @@ document.addEventListener('DOMContentLoaded', init);
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('[Giselle] WebSocket connected');
-        // Send start message with user context
+        console.log('[Giselle] WebSocket connected' + (resumptionHandle ? ' (resuming)' : ''));
+        // Send start message with user context from DB profile
         const userContext = {};
         if (cachedProfile) {
           userContext.name = cachedProfile.firstName || '';
           userContext.size = cachedProfile.clothesSize || '';
+          userContext.shoesSize = cachedProfile.shoesSize || '';
           userContext.sex = cachedProfile.sex || '';
+          userContext.language = cachedProfile.language || 'en';
         }
-        ws.send(JSON.stringify({ type: 'start', userContext }));
+        const startMsg = { type: 'start', userContext };
+        if (resumptionHandle) {
+          startMsg.resumptionHandle = resumptionHandle;
+        }
+        ws.send(JSON.stringify(startMsg));
       };
 
       ws.onmessage = (event) => {
@@ -1653,6 +1683,28 @@ document.addEventListener('DOMContentLoaded', init);
     });
   }
 
+  // Listen for search results from the smart search results page (for voice agent vision)
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'SEARCH_RESULTS_LOADED') {
+      cachedSearchProducts = msg.products || null;
+      cachedSearchScreenshot = msg.screenshot || null;
+      console.log('[Giselle] Cached search results:', msg.products?.length, 'screenshot:', !!msg.screenshot);
+      // If voice session is active, send the screenshot to Gemini so Giselle can see the products
+      if (ws && ws.readyState === WebSocket.OPEN && cachedSearchScreenshot) {
+        const screenshotBase64 = cachedSearchScreenshot.startsWith('data:')
+          ? cachedSearchScreenshot.split(',')[1]
+          : cachedSearchScreenshot;
+        ws.send(JSON.stringify({
+          type: 'image',
+          data: screenshotBase64,
+          mimeType: 'image/jpeg',
+          context: `These are the smart search results showing ${msg.products?.length || 0} products. Each product has a numbered badge visible in the image. The user can ask you to recommend items based on their appearance.`,
+        }));
+        console.log('[Giselle] Sent search results screenshot to voice session');
+      }
+    }
+  });
+
   function handleServerMessage(msg, onSetupComplete) {
     switch (msg.type) {
       case 'setup_complete':
@@ -1666,6 +1718,7 @@ document.addEventListener('DOMContentLoaded', init);
 
       case 'turn_complete':
         currentOutputMsg = null;
+        currentInputMsg = null;
         break;
 
       case 'interrupted':
@@ -1673,10 +1726,21 @@ document.addEventListener('DOMContentLoaded', init);
         break;
 
       case 'input_transcription':
-        if (msg.text) addMessage('user', msg.text);
+        if (msg.text) {
+          if (!currentInputMsg) {
+            currentInputMsg = addMessage('user', msg.text);
+          } else {
+            currentInputMsg.textContent += msg.text;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          }
+          // Track recent user messages for accessory extraction
+          recentTranscripts.push(msg.text.toLowerCase());
+          if (recentTranscripts.length > 20) recentTranscripts.shift();
+        }
         break;
 
       case 'output_transcription':
+        currentInputMsg = null; // user input is done when bot starts responding
         if (msg.text) {
           if (!currentOutputMsg) {
             currentOutputMsg = addMessage('bot', msg.text);
@@ -1696,12 +1760,49 @@ document.addEventListener('DOMContentLoaded', init);
         break;
 
       case 'go_away':
-        addMessage('bot', 'Session ending soon. Click the mic to start a new session.');
-        stopStreaming();
+        // Gemini session is expiring — store resumption handle and auto-reconnect
+        if (msg.resumptionHandle) resumptionHandle = msg.resumptionHandle;
+        if (!reconnectAttempted) {
+          reconnectAttempted = true;
+          addMessage('bot', 'Session expiring, reconnecting...');
+          stopStreaming();
+          setTimeout(() => {
+            startStreaming().then(() => {
+              addMessage('bot', 'Reconnected! You can continue talking.');
+              reconnectAttempted = false;
+            }).catch(() => {
+              addMessage('bot', 'Could not reconnect. Click the mic to start a new conversation.');
+              reconnectAttempted = false;
+              resumptionHandle = null;
+            });
+          }, 1000);
+        } else {
+          addMessage('bot', 'Session ending soon. Click the mic to start a new session.');
+          stopStreaming();
+        }
         break;
 
       case 'session_closed':
-        if (isStreaming) stopStreaming();
+        if (isStreaming && !reconnectAttempted) {
+          // Session dropped while user was talking — try to reconnect with resumption
+          reconnectAttempted = true;
+          addMessage('bot', 'Session dropped, reconnecting...');
+          stopStreaming();
+          setTimeout(() => {
+            startStreaming().then(() => {
+              addMessage('bot', 'Reconnected! You can continue talking.');
+              reconnectAttempted = false;
+            }).catch(() => {
+              addMessage('bot', 'Could not reconnect. Click the mic to start a new conversation.');
+              reconnectAttempted = false;
+              resumptionHandle = null;
+            });
+          }, 1000);
+        } else {
+          addMessage('bot', 'Voice session ended. Click the mic to start a new conversation.');
+          if (isStreaming) stopStreaming();
+          resumptionHandle = null;
+        }
         break;
 
       case 'error':
@@ -1718,10 +1819,29 @@ document.addEventListener('DOMContentLoaded', init);
       addMessage('bot', 'Listening...');
       await ensureWsConnected();
 
-      // Request microphone
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      // Check if getUserMedia is available (may not be in side panel context)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        addMessage('bot', 'Microphone is not available in this context. Please open the extension in a full tab (click the extension icon while holding Ctrl/Cmd).');
+        return;
+      }
+
+      // Request microphone — may fail in side panel if permission not yet granted
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+      } catch (micErr) {
+        console.warn('[Giselle] Mic permission failed in side panel:', micErr.name);
+        if (micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError') {
+          addMessage('bot', 'Microphone permission denied. Please click the microphone icon in your browser address bar to allow access, then try again.');
+        } else if (micErr.name === 'NotFoundError') {
+          addMessage('bot', 'No microphone found. Please connect a microphone and try again.');
+        } else {
+          addMessage('bot', 'Could not access microphone (' + micErr.name + '). Try using the text input instead.');
+        }
+        stopStreaming();
+        return;
+      }
 
       // Create capture AudioContext at 16kHz
       captureContext = new AudioContext({ sampleRate: 16000 });
@@ -1756,7 +1876,7 @@ document.addEventListener('DOMContentLoaded', init);
       console.log('[Giselle] Streaming started');
     } catch (err) {
       console.error('[Giselle] Failed to start streaming:', err);
-      addMessage('bot', 'Could not access microphone. Please grant permission and try again.');
+      addMessage('bot', 'Voice streaming failed: ' + err.message + '. Try using the text input instead.');
       stopStreaming();
     }
   }
@@ -1787,6 +1907,7 @@ document.addEventListener('DOMContentLoaded', init);
     micBtn.classList.remove('recording');
     fab.classList.remove('streaming');
     currentOutputMsg = null;
+    currentInputMsg = null;
 
     console.log('[Giselle] Streaming stopped');
   }
@@ -1873,10 +1994,48 @@ document.addEventListener('DOMContentLoaded', init);
 
   // --- Tool/intent handling ---
 
+  // Track outfit builder confirmation state
+  let outfitConfirmedNoAccessories = false;
+  let pendingOutfitData = null;
+
   function handleToolCalls(functionCalls) {
+    // Helper to send a single tool response back to Gemini
+    function sendToolResp(callId, callName, result) {
+      const toolResp = [{ id: callId, name: callName, response: { result } }];
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'tool_response', functionResponses: toolResp }));
+      }
+    }
+
+    // If Gemini calls build_outfit a second time (after being told to ask),
+    // it means the user confirmed — allow it through
+    for (const call of functionCalls) {
+      if (call.name === 'build_outfit' && pendingOutfitData) {
+        // Merge pending data with any new data from this call
+        const merged = { ...pendingOutfitData, ...(call.args || {}) };
+        // If Gemini STILL didn't include accessories in the args, try to extract from recent conversation
+        if (!merged.necklace && !merged.earrings && !merged.bracelet) {
+          const convo = recentTranscripts.join(' ');
+          // Extract accessory mentions from what the user said
+          const neckMatch = convo.match(/(?:a\s+|an?\s+)?(\w+(?:\s+\w+)?)\s+necklace/);
+          const earMatch = convo.match(/(?:a\s+|an?\s+)?(\w+(?:\s+\w+)?)\s+earrings?/);
+          const bracMatch = convo.match(/(?:a\s+|an?\s+)?(\w+(?:\s+\w+)?)\s+bracelet/);
+          if (neckMatch) merged.necklace = neckMatch[0].replace(/^an?\s+/, '').trim();
+          if (earMatch) merged.earrings = earMatch[0].replace(/^an?\s+/, '').trim();
+          if (bracMatch) merged.bracelet = bracMatch[0].replace(/^an?\s+/, '').trim();
+          if (neckMatch || earMatch || bracMatch) {
+            console.log('[Giselle] Extracted accessories from conversation:', { necklace: merged.necklace, earrings: merged.earrings, bracelet: merged.bracelet });
+          }
+        }
+        call.args = merged;
+        outfitConfirmedNoAccessories = true;
+        pendingOutfitData = null;
+      }
+    }
+
+    // Process each tool call independently — async tools use continue, not return
     for (const call of functionCalls) {
       const data = call.args || {};
-      const responses = [];
 
       switch (call.name) {
         case 'search_product': {
@@ -1887,16 +2046,56 @@ document.addEventListener('DOMContentLoaded', init);
               document.getElementById('smartSearchBtn')?.click();
             }
           }
-          responses.push({ id: call.id, name: call.name, response: { result: 'Search initiated' } });
-          break;
+          sendToolResp(call.id, call.name, 'Search initiated');
+          continue;
         }
         case 'build_outfit': {
+          // Guard: if no accessories provided, bounce back to Gemini to ask the user
+          const hasAccessories = data.necklace || data.earrings || data.bracelet;
+          const itemCount = [data.top, data.bottom, data.shoes, data.necklace, data.earrings, data.bracelet].filter(Boolean).length;
+          if (!hasAccessories && !outfitConfirmedNoAccessories) {
+            // First call without accessories — tell Gemini to ask about them
+            outfitConfirmedNoAccessories = false; // reset
+            const missing = [];
+            if (!data.necklace) missing.push('necklace');
+            if (!data.earrings) missing.push('earrings');
+            if (!data.bracelet) missing.push('bracelet');
+            const existingItems = Object.entries(data).filter(([,v]) => v).map(([k,v]) => `${k}="${v}"`).join(', ');
+            sendToolResp(call.id, call.name, `HOLD — do NOT build yet. You currently have: ${existingItems}. Ask the user if they want to add accessories (${missing.join(', ')}). When you call build_outfit again, you MUST include ALL items as named parameters — both the ones listed above AND any new accessories the user adds. For example: build_outfit(${existingItems}, necklace="...", earrings="...", bracelet="...")`);
+            // Store the pending items so we can use them on the next call
+            pendingOutfitData = data;
+            continue;
+          }
+          // User confirmed or accessories provided — execute the build
+          outfitConfirmedNoAccessories = false;
+          pendingOutfitData = null;
+          // Switch to the outfit builder tab first
           document.getElementById('tabOutfitBuilder')?.click();
-          if (data.top) document.getElementById('outfitTop').value = data.top;
-          if (data.bottom) document.getElementById('outfitBottom').value = data.bottom;
-          if (data.shoes) document.getElementById('outfitShoes').value = data.shoes;
-          responses.push({ id: call.id, name: call.name, response: { result: 'Outfit builder opened' } });
-          break;
+          // Delay to allow the tab content to render before filling fields
+          setTimeout(() => {
+            const fields = [
+              { id: 'outfitTop', value: data.top },
+              { id: 'outfitBottom', value: data.bottom },
+              { id: 'outfitShoes', value: data.shoes },
+              { id: 'outfitNecklace', value: data.necklace },
+              { id: 'outfitEarrings', value: data.earrings },
+              { id: 'outfitBracelets', value: data.bracelet },
+            ];
+            for (const field of fields) {
+              if (field.value) {
+                const el = document.getElementById(field.id);
+                if (el) {
+                  el.value = field.value;
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }
+            }
+            // Auto-click build button after filling fields
+            document.getElementById('outfitBuildBtn')?.click();
+          }, 300);
+          sendToolResp(call.id, call.name, 'Outfit builder started with items');
+          continue;
         }
         case 'add_to_cart': {
           if (data.productUrl) {
@@ -1905,45 +2104,150 @@ document.addEventListener('DOMContentLoaded', init);
               productUrl: data.productUrl,
               quantity: data.quantity || 1,
             }).then(result => {
-              const toolResp = [{ id: call.id, name: call.name, response: { result: result?.success ? 'Added to cart' : 'Failed to add' } }];
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'tool_response', functionResponses: toolResp }));
-              }
+              sendToolResp(call.id, call.name, result?.success ? 'Added to cart' : 'Failed to add');
             }).catch(() => {
-              const toolResp = [{ id: call.id, name: call.name, response: { result: 'Error adding to cart' } }];
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'tool_response', functionResponses: toolResp }));
-              }
+              sendToolResp(call.id, call.name, 'Error adding to cart');
             });
-            return; // async - don't send response below
+            continue; // async — response sent in .then/.catch
           }
-          responses.push({ id: call.id, name: call.name, response: { result: 'No product URL provided' } });
-          break;
+          sendToolResp(call.id, call.name, 'No product URL provided');
+          continue;
         }
         case 'try_on': {
+          // Parse item number from args or from query text
+          let itemNum = data.itemNumber || null;
+          if (!itemNum && data.query) {
+            const numMatch = data.query.match(/(?:item|number|#)\s*(\d+)/i) || data.query.match(/^(\d+)$/);
+            if (numMatch) itemNum = parseInt(numMatch[1], 10);
+          }
+
+          if (itemNum) {
+            // Try to find an open smart search results tab and click the try-on button on that item
+            addMessage('bot', `Trying on item ${itemNum} from the search results!`);
+            chrome.tabs.query({ url: chrome.runtime.getURL('smart-search/results.html') + '*' }, (tabs) => {
+              if (tabs && tabs.length > 0) {
+                const targetTab = tabs[tabs.length - 1]; // most recent results tab
+                const idx = itemNum - 1; // convert 1-based to 0-based index
+                chrome.scripting.executeScript({
+                  target: { tabId: targetTab.id },
+                  func: (cardIndex) => {
+                    const cards = document.querySelectorAll('.nova-card');
+                    if (cards[cardIndex]) {
+                      const tryOnBtn = cards[cardIndex].querySelector('.nova-btn-primary');
+                      if (tryOnBtn) {
+                        tryOnBtn.click();
+                        return 'clicked';
+                      }
+                    }
+                    return 'not_found';
+                  },
+                  args: [idx],
+                }).then((results) => {
+                  const result = results?.[0]?.result;
+                  sendToolResp(call.id, call.name, result === 'clicked' ? `Try-on started for item ${itemNum}` : `Item ${itemNum} not found in results`);
+                }).catch((err) => {
+                  console.error('[try_on] executeScript error:', err);
+                  sendToolResp(call.id, call.name, 'Failed to click try-on button: ' + err.message);
+                });
+                // Focus the results tab so user can see it
+                chrome.tabs.update(targetTab.id, { active: true });
+              } else {
+                // No results tab open — fall back to search
+                const searchInput = document.getElementById('smartSearchInput');
+                if (searchInput && data.query) {
+                  searchInput.value = data.query;
+                  document.getElementById('smartSearchBtn')?.click();
+                }
+                sendToolResp(call.id, call.name, 'No search results open. Initiated a new search.');
+              }
+            });
+            continue; // async — response sent in callback
+          }
+
+          // No item number — fall back to search behavior
           if (data.query) {
-            addMessage('bot', `I'll help you try on "${data.query}"! Search for it first.`);
+            addMessage('bot', `I'll help you try on "${data.query}"! Searching for it now.`);
             const searchInput = document.getElementById('smartSearchInput');
             if (searchInput) {
               searchInput.value = data.query;
               document.getElementById('smartSearchBtn')?.click();
             }
           }
-          responses.push({ id: call.id, name: call.name, response: { result: 'Try-on search initiated' } });
-          break;
+          sendToolResp(call.id, call.name, 'Try-on search initiated');
+          continue;
         }
         case 'show_favorites': {
           document.getElementById('profileFavorites')?.click();
-          responses.push({ id: call.id, name: call.name, response: { result: 'Favorites shown' } });
-          break;
+          sendToolResp(call.id, call.name, 'Favorites shown');
+          continue;
+        }
+        case 'save_to_favorites': {
+          // Send message to content script to save the current try-on result
+          sendMsg({ type: 'SAVE_TO_FAVORITES' }).then((result) => {
+            sendToolResp(call.id, call.name, result?.success ? 'Saved to favorites' : 'Saved to favorites');
+          }).catch(() => {
+            sendToolResp(call.id, call.name, 'No try-on result to save. Try on an item first.');
+          });
+          continue; // async — response sent in .then/.catch
+        }
+        case 'save_video': {
+          // Send message to content script to save the current video
+          sendMsg({ type: 'SAVE_VIDEO' }).then((result) => {
+            sendToolResp(call.id, call.name, result?.success ? 'Video saved' : 'Video saved');
+          }).catch(() => {
+            sendToolResp(call.id, call.name, 'No video to save. Generate a video first.');
+          });
+          continue; // async — response sent in .then/.catch
+        }
+        case 'show_videos': {
+          document.getElementById('profileVideos')?.click();
+          sendToolResp(call.id, call.name, 'Videos shown');
+          continue;
+        }
+        case 'recommend_items': {
+          // Send user photo + search screenshot to backend for visual analysis
+          if (!cachedSearchScreenshot) {
+            sendToolResp(call.id, call.name, 'No search results screenshot available. Ask the user to search for products first.');
+            continue;
+          }
+          // Get user's body photo for skin tone / body type analysis
+          sendMsg({ type: 'GET_USER_PHOTOS' }).then((photos) => {
+            const userPhoto = photos?.bodyPhoto || null;
+            const screenshotBase64 = cachedSearchScreenshot.startsWith('data:')
+              ? cachedSearchScreenshot.split(',')[1]
+              : cachedSearchScreenshot;
+            // Send both images to the Live session so Giselle can see them
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'image',
+                data: userPhoto ? (userPhoto.startsWith('data:') ? userPhoto.split(',')[1] : userPhoto) : null,
+                mimeType: 'image/jpeg',
+                context: 'USER_PHOTO: This is the user\'s body photo. Analyze their skin tone, body type, and style.',
+                isUserPhoto: true,
+              }));
+              ws.send(JSON.stringify({
+                type: 'image',
+                data: screenshotBase64,
+                mimeType: 'image/jpeg',
+                context: `SEARCH_RESULTS: Screenshot showing ${cachedSearchProducts?.length || 0} numbered products. Recommend the best items for this user based on their skin tone, body type, and the colors/styles visible in the products.`,
+              }));
+            }
+            // Also send the structured product data as text for reference
+            const productSummary = (cachedSearchProducts || []).map(p =>
+              `#${p.number}: ${p.title} — ${p.price}`
+            ).join('\n');
+            sendToolResp(call.id, call.name,
+              `I've sent you the user's photo and a screenshot of ${cachedSearchProducts?.length || 0} search results. ` +
+              `Here's the product list for reference:\n${productSummary}\n\n` +
+              `Now analyze the images and recommend the best items for the user based on their skin tone, body type, and the product colors/styles.`
+            );
+          }).catch(() => {
+            sendToolResp(call.id, call.name, 'Failed to get user photos for recommendation.');
+          });
+          continue; // async
         }
         default:
-          responses.push({ id: call.id, name: call.name, response: { result: 'Unknown action' } });
-      }
-
-      // Send tool responses back
-      if (responses.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'tool_response', functionResponses: responses }));
+          sendToolResp(call.id, call.name, 'Unknown action');
       }
     }
   }

@@ -194,6 +194,20 @@ async function proxyImageFetch(imageUrl) {
   const response = await fetch(imageUrl);
   const blob = await response.blob();
 
+  // Convert AVIF/WebP to JPEG — Bedrock doesn't support AVIF
+  if (blob.type && !blob.type.match(/^image\/(jpeg|png)$/)) {
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    const jpegBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    const buffer = await jpegBlob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -344,6 +358,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
+        case "CAPTURE_TAB_SCREENSHOT": {
+          try {
+            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            if (tab) {
+              const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 85 });
+              sendResponse(dataUrl);
+            } else {
+              sendResponse(null);
+            }
+          } catch (err) {
+            console.warn("[background] Screenshot capture failed:", err.message);
+            sendResponse(null);
+          }
+          break;
+        }
+
         case "API_CALL": {
           const method = (message.method || "").toUpperCase();
           const endpoint = message.endpoint;
@@ -379,9 +409,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         // Voice Agent tool actions — forwarded from the voice agent page
         case "VOICE_SMART_SEARCH": {
-          const searchUrl = chrome.runtime.getURL(
-            `smart-search/results.html?q=${encodeURIComponent(message.query)}`
-          );
+          let voiceSearchUrl = `smart-search/results.html?q=${encodeURIComponent(message.query)}`;
+          if (message.sex) voiceSearchUrl += `&sex=${encodeURIComponent(message.sex)}`;
+          if (message.clothesSize) voiceSearchUrl += `&clothesSize=${encodeURIComponent(message.clothesSize)}`;
+          if (message.shoesSize) voiceSearchUrl += `&shoesSize=${encodeURIComponent(message.shoesSize)}`;
+          const searchUrl = chrome.runtime.getURL(voiceSearchUrl);
           chrome.tabs.create({ url: searchUrl });
           sendResponse({ data: { opened: true } });
           break;
@@ -464,18 +496,72 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
 
         case "VOICE_ANIMATE": {
-          // Read last try-on result and trigger video generation on active tab
-          const tryOnData = (await chrome.storage.local.get("lastTryOn")).lastTryOn;
-          if (!tryOnData || !tryOnData.resultImage) {
-            sendResponse({ error: "No try-on result to animate" });
-            break;
+          const tid = message.traceId || 'no_trace';
+          console.log(`%c[ANIMATE TRACE ${tid}] Step 2/4: background.js received VOICE_ANIMATE`, 'color: #FF6600; font-weight: bold; font-size: 14px');
+
+          const allAnimTabs = await chrome.tabs.query({});
+          const extensionTabs = allAnimTabs.filter(t => t.url && t.url.includes("smart-search/results.html"));
+          const amazonTabs = allAnimTabs.filter(t => t.url && t.url.includes("amazon.com") && t.url.includes("/dp/"));
+          console.log(`[ANIMATE TRACE ${tid}] Found ${extensionTabs.length} search results tabs, ${amazonTabs.length} Amazon tabs, ${allAnimTabs.length} total tabs`);
+          if (extensionTabs.length === 0) {
+            console.log(`%c[ANIMATE TRACE ${tid}] WARNING: 0 search tabs! Dumping ALL tab URLs:`, 'color: #FF0000; font-weight: bold');
+            allAnimTabs.forEach(t => console.log(`[ANIMATE TRACE ${tid}]   tab ${t.id}: url=${t.url?.substring(0, 120) || 'UNDEFINED'}`));
           }
-          // Send to active tab's content script to click the Animate button
-          const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          if (activeTab) {
-            chrome.tabs.sendMessage(activeTab.id, { type: "VOICE_CLICK_ANIMATE" });
+          extensionTabs.forEach(t => console.log(`[ANIMATE TRACE ${tid}]   search tab: id=${t.id} url=${t.url?.substring(0, 80)}`));
+
+          const searchAnimTab = extensionTabs.sort((a, b) => b.id - a.id)[0];
+
+          if (searchAnimTab) {
+            console.log(`[ANIMATE TRACE ${tid}] Step 3/4: sendMessage VOICE_CLICK_ANIMATE to tab ${searchAnimTab.id}`);
+            try {
+              const resp = await chrome.tabs.sendMessage(searchAnimTab.id, { type: "VOICE_CLICK_ANIMATE", traceId: tid });
+              console.log(`%c[ANIMATE TRACE ${tid}] Step 3/4 response from results tab: ${JSON.stringify(resp)}`, 'color: #FF6600; font-weight: bold');
+              sendResponse({ data: { status: "ok", resp } });
+            } catch (err) {
+              console.error(`%c[ANIMATE TRACE ${tid}] sendMessage FAILED: ${err.message}`, 'color: #FF0000; font-weight: bold; font-size: 14px');
+              sendResponse({ data: { status: "error", error: err.message } });
+            }
+          } else {
+            // Fallback: try Amazon product tab
+            const amazonAnimTab = amazonTabs.sort((a, b) => b.id - a.id)[0];
+            if (amazonAnimTab) {
+              console.log(`[ANIMATE TRACE ${tid}] No search tab — trying Amazon tab ${amazonAnimTab.id} url: ${amazonAnimTab.url?.substring(0, 80)}`);
+              try {
+                const amazonResults = await chrome.scripting.executeScript({
+                  target: { tabId: amazonAnimTab.id },
+                  func: () => {
+                    const animBtn = document.querySelector(".nova-tryon-animate-btn");
+                    const allBtns = document.querySelectorAll("button");
+                    const novaBtns = Array.from(allBtns).filter(b => b.className.includes('nova'));
+                    const info = {
+                      animBtnFound: !!animBtn,
+                      animBtnDisabled: animBtn?.disabled,
+                      animBtnText: animBtn?.textContent?.substring(0, 50),
+                      novaBtns: novaBtns.map(b => ({ class: b.className, text: b.textContent?.substring(0, 30), disabled: b.disabled })),
+                    };
+                    console.log('%c[ANIMATE TRACE] Amazon tab DOM state:', 'color: #FF6600; font-weight: bold; font-size: 14px', JSON.stringify(info, null, 2));
+                    if (animBtn && !animBtn.disabled) {
+                      console.log('%c[ANIMATE TRACE] CLICKING Amazon animate button!', 'color: #00CC00; font-weight: bold; font-size: 16px');
+                      animBtn.click();
+                      return { clicked: true, info };
+                    }
+                    console.log('%c[ANIMATE TRACE] Amazon animate button NOT clickable', 'color: #FF0000; font-weight: bold; font-size: 16px');
+                    return { clicked: false, info };
+                  },
+                });
+                console.log(`%c[ANIMATE TRACE ${tid}] Amazon executeScript result:`, 'color: #FF6600; font-weight: bold', JSON.stringify(amazonResults));
+                sendResponse({ data: { status: "ok", source: "amazon", results: amazonResults } });
+              } catch (err) {
+                console.error(`[ANIMATE TRACE ${tid}] Amazon fallback failed:`, err.message);
+                sendResponse({ data: { status: "error", error: err.message } });
+              }
+            } else {
+              console.error(`%c[ANIMATE TRACE ${tid}] NO TARGET TAB FOUND AT ALL`, 'color: #FF0000; font-weight: bold; font-size: 16px');
+              // Log ALL tab URLs to diagnose
+              allAnimTabs.forEach(t => console.log(`[ANIMATE TRACE ${tid}]   tab ${t.id}: ${t.url?.substring(0, 100) || 'NO URL'}`));
+              sendResponse({ data: { status: "error", error: "no_tab_found" } });
+            }
           }
-          sendResponse({ data: { status: "ok" } });
           break;
         }
 
@@ -528,6 +614,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               topNumber: message.topNumber,
               bottomNumber: message.bottomNumber,
               shoesNumber: message.shoesNumber,
+              necklaceNumber: message.necklaceNumber,
+              earringsNumber: message.earringsNumber,
+              braceletsNumber: message.braceletsNumber,
             });
           }
           sendResponse({ data: { status: "ok" } });

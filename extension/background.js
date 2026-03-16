@@ -167,7 +167,7 @@ async function getStoredPhotos() {
   let facePhoto = result.facePhoto || null;
   const selectedPoseIndex = result.selectedPoseIndex ?? 0;
 
-  // If photos are missing from local storage, fetch from backend (S3)
+  // If photos are missing from local storage, fetch from backend (GCS)
   if (!bodyPhoto || !facePhoto) {
     try {
       const allPhotos = await apiGet("/api/profile/photos/all");
@@ -384,12 +384,55 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           break;
         }
 
+        case "SAVE_TO_FAVORITES": {
+          // Forward to active tab's content script to trigger the save-to-favorites button
+          const [favTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (favTab?.id) {
+            chrome.tabs.sendMessage(favTab.id, { type: "SAVE_TO_FAVORITES" }, (res) => {
+              sendResponse({ data: res || { success: true } });
+            });
+          } else {
+            sendResponse({ error: "No active tab found" });
+          }
+          break;
+        }
+
+        case "SAVE_VIDEO": {
+          // Forward to active tab's content script to trigger the save-video button
+          const [vidTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (vidTab?.id) {
+            chrome.tabs.sendMessage(vidTab.id, { type: "SAVE_VIDEO" }, (res) => {
+              sendResponse({ data: res || { success: true } });
+            });
+          } else {
+            sendResponse({ error: "No active tab found" });
+          }
+          break;
+        }
+
         case "OPEN_POPUP": {
           // Open the side panel instead of popup
           if (_sender.tab) {
             await chrome.sidePanel.open({ tabId: _sender.tab.id });
           }
           sendResponse({ data: { opened: true } });
+          break;
+        }
+
+        case "CAPTURE_TAB_SCREENSHOT": {
+          // Capture a screenshot of the currently visible tab (used for voice agent vision)
+          try {
+            const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+            if (tab) {
+              const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 85 });
+              sendResponse({ data: dataUrl });
+            } else {
+              sendResponse({ data: null });
+            }
+          } catch (err) {
+            console.warn("[background] Screenshot capture failed:", err.message);
+            sendResponse({ data: null });
+          }
           break;
         }
 

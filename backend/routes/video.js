@@ -139,7 +139,7 @@ router.get("/:jobId", async (req, res, next) => {
 // POST /api/video/save — Save a video to Cloud Storage and store metadata in Firestore
 router.post("/save", requireAuth, async (req, res, next) => {
   try {
-    const { videoUrl, videoBase64, productTitle, productImage } = req.body;
+    const { videoUrl, videoBase64, productTitle, productImage, outfitItems } = req.body;
     // Backward compat: accept asin if productId not provided
     const productId = req.body.productId || req.body.asin || "";
     const retailer = req.body.retailer || "amazon";
@@ -189,6 +189,17 @@ router.post("/save", requireAuth, async (req, res, next) => {
       retailer,
       productTitle: productTitle || "",
       productImage: productImage || "",
+      // Store outfit item links (up to 6 items from outfit builder)
+      ...(outfitItems && Array.isArray(outfitItems) && outfitItems.length > 0 && {
+        outfitItems: outfitItems.slice(0, 6).map(item => ({
+          title: (item.title || "").slice(0, 200),
+          price: (item.price || "").slice(0, 20),
+          productUrl: (item.productUrl || "").slice(0, 500),
+          imageUrl: (item.imageUrl || "").slice(0, 500),
+          category: (item.category || "").slice(0, 30),
+          asin: (item.asin || "").slice(0, 20),
+        })),
+      }),
     });
 
     console.log(`[video] Video saved: ${key}`);

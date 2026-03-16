@@ -93,7 +93,7 @@ router.post("/", optionalAuth, async (req, res, next) => {
   try {
     let { sourceImage, referenceImage, garmentClass, mergeStyle, framing, poseIndex, quickMode, productTitle } = req.body;
 
-    // If authenticated and no sourceImage provided, fetch from S3
+    // If authenticated and no sourceImage provided, fetch from GCS
     if (!sourceImage && req.userId) {
       const profile = await getProfile(req.userId);
       if (profile) {
@@ -183,9 +183,9 @@ router.post("/", optionalAuth, async (req, res, next) => {
       })(),
       // STEP 3: OUTFIT CLASSIFICATION
       (async () => {
-        const s3 = Date.now();
+        const t3 = Date.now();
         const result = await classifyOutfit(sourceImage);
-        return { result, time: ((Date.now() - s3) / 1000).toFixed(1) };
+        return { result, time: ((Date.now() - t3) / 1000).toFixed(1) };
       })(),
     ]);
 
@@ -309,7 +309,7 @@ router.post("/outfit", optionalAuth, async (req, res, next) => {
       }
     }
 
-    // If no sourceImage, fetch from S3; also fetch face reference photos for identity
+    // If no sourceImage, fetch from GCS; also fetch face reference photos for identity
     let faceReferenceImages = [];
     if (!sourceImage && req.userId) {
       const profile = await getProfile(req.userId);

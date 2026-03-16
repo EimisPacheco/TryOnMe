@@ -360,6 +360,16 @@ select.text-input { cursor: pointer; }
   padding: 0 4px; transition: color 0.2s;
 }
 .video-card-delete:hover { color: #ff4757; }
+.video-card-outfit-items {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+}
+.video-outfit-link {
+  font-size: 10px; color: #FF9900; background: rgba(255, 153, 0, 0.1);
+  padding: 2px 6px; border-radius: 4px; text-decoration: none;
+  border: 1px solid rgba(255, 153, 0, 0.2); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 140px; display: inline-block;
+}
+a.video-outfit-link:hover { background: rgba(255, 153, 0, 0.25); text-decoration: none; }
 
 .profile-actions {
   display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;
@@ -1084,21 +1094,21 @@ select.text-input { cursor: pointer; }
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #FF6B9D, #C44BFF);
+  background: linear-gradient(135deg, #FF9900, #6C63FF);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgba(196, 75, 255, 0.4);
+  box-shadow: 0 4px 16px rgba(108, 99, 255, 0.4);
   z-index: 1000;
   transition: transform 0.2s, box-shadow 0.2s;
 }
 .giselle-fab:hover {
   transform: scale(1.1);
-  box-shadow: 0 6px 20px rgba(196, 75, 255, 0.6);
+  box-shadow: 0 6px 20px rgba(108, 99, 255, 0.6);
 }
 .giselle-fab.active {
-  background: linear-gradient(135deg, #C44BFF, #FF6B9D);
+  background: linear-gradient(135deg, #6C63FF, #FF9900);
 }
 .giselle-panel {
   position: fixed;
@@ -1106,9 +1116,9 @@ select.text-input { cursor: pointer; }
   right: 8px;
   left: 8px;
   max-height: 60vh;
-  background: #1a1a2e;
+  background: #232f3e;
   border-radius: 16px;
-  border: 1px solid rgba(196, 75, 255, 0.3);
+  border: 1px solid rgba(255, 153, 0, 0.4);
   display: flex;
   flex-direction: column;
   z-index: 999;
@@ -1121,29 +1131,28 @@ select.text-input { cursor: pointer; }
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  background: linear-gradient(135deg, rgba(196, 75, 255, 0.15), rgba(255, 107, 157, 0.15));
-  border-bottom: 1px solid rgba(196, 75, 255, 0.2);
+  background: linear-gradient(135deg, #FF9900, #6C63FF);
+  border-bottom: 1px solid rgba(108, 99, 255, 0.3);
 }
 .giselle-avatar {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #FFF0E6, #FFE0F0);
+  background: linear-gradient(135deg, #FFF0E6, #E8E6FF);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 2px solid rgba(196, 75, 255, 0.3);
-  flex-shrink: 0;
+  border: 2px solid #FF9900;
   flex-shrink: 0;
 }
 .giselle-name { color: #fff; font-weight: 600; font-size: 14px; }
-.giselle-subtitle { color: #aaa; font-size: 11px; }
+.giselle-subtitle { color: rgba(255, 255, 255, 0.85); font-size: 11px; }
 .giselle-close {
   margin-left: auto;
   background: none;
   border: none;
-  color: #aaa;
+  color: rgba(255, 255, 255, 0.8);
   font-size: 22px;
   cursor: pointer;
   padding: 0 4px;
@@ -1167,31 +1176,42 @@ select.text-input { cursor: pointer; }
   word-wrap: break-word;
 }
 .giselle-msg-bot {
-  background: rgba(196, 75, 255, 0.12);
-  color: #e0d0f0;
+  background: #2a3a4e;
+  color: #e0e4ea;
   align-self: flex-start;
   border-bottom-left-radius: 4px;
 }
 .giselle-msg-user {
-  background: rgba(255, 153, 0, 0.15);
-  color: #f0e0c0;
+  background: rgba(255, 153, 0, 0.25);
+  color: #fff;
   align-self: flex-end;
   border-bottom-right-radius: 4px;
+  border: 1px solid rgba(255, 153, 0, 0.4);
 }
 .giselle-msg-typing {
-  color: #aaa;
+  color: #FF9900;
   font-style: italic;
 }
 .giselle-input-row {
   display: flex;
   gap: 6px;
   padding: 10px 12px;
-  border-top: 1px solid rgba(196, 75, 255, 0.2);
+  border-top: 1px solid rgba(255, 153, 0, 0.3);
   align-items: center;
 }
 .giselle-input-row .text-input {
   flex: 1;
   font-size: 13px;
+  border-color: #FF9900;
+  background: #1a2636;
+  color: #fff;
+}
+.giselle-input-row .text-input::placeholder {
+  color: #8899aa;
+}
+.giselle-input-row .text-input:focus {
+  border-color: #FF9900;
+  box-shadow: 0 0 0 3px rgba(255, 153, 0, 0.2);
 }
 .giselle-mic-btn, .giselle-send-btn {
   width: 34px;
@@ -1206,30 +1226,30 @@ select.text-input { cursor: pointer; }
   transition: background 0.2s;
 }
 .giselle-mic-btn {
-  background: rgba(255, 107, 157, 0.2);
-  color: #FF6B9D;
+  background: #FF9900;
+  color: #fff;
 }
-.giselle-mic-btn:hover { background: rgba(255, 107, 157, 0.35); }
+.giselle-mic-btn:hover { background: #FFB84D; }
 .giselle-mic-btn.recording {
-  background: #FF6B9D;
+  background: #FF9900;
   color: white;
   animation: giselle-pulse 1s infinite;
 }
 .giselle-send-btn {
-  background: rgba(196, 75, 255, 0.2);
-  color: #C44BFF;
+  background: #6C63FF;
+  color: #fff;
 }
-.giselle-send-btn:hover { background: rgba(196, 75, 255, 0.35); }
+.giselle-send-btn:hover { background: #8078FF; }
 @keyframes giselle-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 157, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(255, 107, 157, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 153, 0, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(255, 153, 0, 0); }
 }
 .giselle-live-dot {
   display: none;
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #4ade80;
+  background: #FF9900;
   margin-left: 4px;
   vertical-align: middle;
 }

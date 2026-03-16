@@ -84,12 +84,18 @@ CRITICAL classification rules — apply in this EXACT priority order:
 RULE 1 — TITLE KEYWORDS OVERRIDE EVERYTHING:
 - If the product TITLE contains "jumpsuit", "romper", "playsuit", "overalls", or "catsuit" → category: "clothing", garmentClass: "FULL_BODY", ALWAYS. No exceptions. Even if the image looks like two separate pieces.
 - If the product TITLE contains "dress" or "gown" → category: "clothing", garmentClass: "FULL_BODY", ALWAYS.
+
+RULE 2 — TWO-PIECE SETS / MULTI-PIECE OUTFITS (HIGHEST PRIORITY after Rule 1):
+- If the product TITLE contains BOTH an upper-body keyword (top, shirt, blouse, hoodie, jacket, sweater, tankini, crop top, vest) AND a lower-body keyword (pants, jeans, skirt, shorts, leggings) → category: "clothing", garmentClass: "FULL_BODY", garmentSubClass: "FULL_BODY_OUTFIT", ALWAYS. Examples: "Tankini Top And Shorts", "Hoodie and Pants Set", "Crop Top with Skirt Two-Piece".
+- If the product TITLE contains a set indicator ("set", "two-piece", "two piece", "combo", "outfit", "suit") AND at least one clothing keyword → category: "clothing", garmentClass: "FULL_BODY", garmentSubClass: "FULL_BODY_OUTFIT", ALWAYS.
+- This rule applies even if the items are separate pieces — they are sold together and must replace the FULL outfit in try-on.
+
+RULE 3 — SINGLE-PIECE KEYWORDS (only if Rules 1-2 do not apply):
 - If the product TITLE contains "top", "shirt", "blouse", "crop top", "hoodie", "jacket", "sweater" → category: "clothing", garmentClass: "UPPER_BODY", even if the image shows matching pants.
 - If the product TITLE contains "pants", "jeans", "skirt", "shorts", "leggings" → category: "clothing", garmentClass: "LOWER_BODY", even if the image shows a matching top.
 
-RULE 2 — TWO-PIECE SETS (only if title is ambiguous):
+RULE 4 — AMBIGUOUS (only if title has no keywords from above):
 - If the image shows a MATCHING SET (top + bottom sold together) and the title does NOT contain any of the keywords above, classify based on the most prominent piece in the image.
-- FULL_BODY should ONLY be used for SINGLE connected garments — NOT for two separate pieces shown together — UNLESS the title says "jumpsuit", "romper", "dress", etc.
 
 For styleTips, provide 2-3 short, helpful fashion tips about how to style or wear this product.
 
@@ -335,10 +341,23 @@ function classifyByTitle(title) {
   if (/dress|gown/i.test(t)) {
     return { category: "clothing", garmentClass: "FULL_BODY", color: null, styleTips: [] };
   }
-  if (/pants|jeans|skirt|shorts|leggings/i.test(t)) {
+
+  // Two-piece sets: if title contains BOTH upper and lower keywords, or set/two-piece/combo indicators,
+  // classify as FULL_BODY so the try-on replaces the entire outfit
+  const hasUpper = /shirt|blouse|top|hoodie|jacket|sweater|coat|vest|tankini/i.test(t);
+  const hasLower = /pants|jeans|skirt|shorts|leggings/i.test(t);
+  const hasSetIndicator = /\bset\b|two[\s-]?piece|combo|outfit|suit\b/i.test(t);
+  if (hasUpper && hasLower) {
+    return { category: "clothing", garmentClass: "FULL_BODY", garmentSubClass: "FULL_BODY_OUTFIT", color: null, styleTips: [] };
+  }
+  if ((hasUpper || hasLower) && hasSetIndicator) {
+    return { category: "clothing", garmentClass: "FULL_BODY", garmentSubClass: "FULL_BODY_OUTFIT", color: null, styleTips: [] };
+  }
+
+  if (hasLower && !hasUpper) {
     return { category: "clothing", garmentClass: "LOWER_BODY", color: null, styleTips: [] };
   }
-  if (/shirt|blouse|top|hoodie|jacket|sweater|coat|vest/i.test(t)) {
+  if (hasUpper && !hasLower) {
     return { category: "clothing", garmentClass: "UPPER_BODY", color: null, styleTips: [] };
   }
   if (/shoe|boot|sandal|sneaker|heel|slipper/i.test(t)) {

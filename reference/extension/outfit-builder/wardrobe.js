@@ -971,6 +971,18 @@ async function handleAnimate() {
     btn.disabled = false;
     lastVideoSrc = videoSrc;
 
+    // Store last video context for voice "save video" command
+    chrome.storage.local.set({
+      lastVideo: {
+        videoUrl: videoSrc.startsWith("data:") ? null : videoSrc,
+        videoBase64: videoSrc.startsWith("data:") ? videoSrc.split(",")[1] : null,
+        productId: "",
+        productTitle: [selectedTop, selectedBottom, selectedShoes].filter(Boolean).map(i => (i.title || "").split(" ").slice(0, 3).join(" ")).join(" + "),
+        productImage: "",
+        timestamp: Date.now(),
+      }
+    });
+
     // Replace click handler to save
     btn.replaceWith(btn.cloneNode(true));
     const newBtn = document.getElementById("animateBtn");
@@ -1035,6 +1047,8 @@ function sendMessage(msg) {
 // ---------------------------------------------------------------------------
 // Voice Agent — listen for outfit item selection commands
 // ---------------------------------------------------------------------------
+let _voiceSelectTryOnTimer = null;
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "VOICE_SELECT_OUTFIT_ITEMS") {
     console.log("[Wardrobe] Voice selecting items:", message);
@@ -1042,9 +1056,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     function selectByNumber(containerId, number, category) {
       const container = document.getElementById(containerId);
       if (!container || !number) return;
-      const items = container.querySelectorAll(
-        category === "shoes" ? ".shoe-display" : ".hanger-item"
-      );
+      const accessoryCategories = ["necklace", "earrings", "bracelets"];
+      let selector = ".hanger-item";
+      if (category === "shoes") selector = ".shoe-display";
+      else if (accessoryCategories.includes(category)) selector = ".accessory-item";
+      const items = container.querySelectorAll(selector);
       const idx = number - 1;
       if (idx >= 0 && idx < items.length) {
         items[idx].click();
@@ -1056,15 +1072,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.topNumber) selectByNumber("topsContainer", message.topNumber, "top");
     if (message.bottomNumber) selectByNumber("bottomsContainer", message.bottomNumber, "bottom");
     if (message.shoesNumber) selectByNumber("shoesContainer", message.shoesNumber, "shoes");
+    if (message.necklaceNumber) selectByNumber("necklaceContainer", message.necklaceNumber, "necklace");
+    if (message.earringsNumber) selectByNumber("earringsContainer", message.earringsNumber, "earrings");
+    if (message.braceletsNumber) selectByNumber("braceletsContainer", message.braceletsNumber, "bracelets");
 
-    // Trigger try-on after selections settle
-    setTimeout(() => {
-      const needShoes = !!shoesQuery;
-      const canTryOn = selectedTop && selectedBottom && (!needShoes || selectedShoes);
-      if (canTryOn) {
+    // Debounced try-on: reset timer on each call so multiple calls accumulate
+    // selections before triggering try-on (e.g., clothes first, accessories second)
+    // Voice flow requires ALL 6 categories before triggering try-on
+    if (_voiceSelectTryOnTimer) clearTimeout(_voiceSelectTryOnTimer);
+    _voiceSelectTryOnTimer = setTimeout(() => {
+      _voiceSelectTryOnTimer = null;
+      const allSelected = selectedTop && selectedBottom && selectedShoes && selectedNecklace && selectedEarrings && selectedBracelet;
+      if (allSelected) {
         handleTryOn();
+      } else {
+        console.log("[Wardrobe] Voice try-on waiting — not all 6 categories selected yet.",
+          "top:", !!selectedTop, "bottom:", !!selectedBottom, "shoes:", !!selectedShoes,
+          "necklace:", !!selectedNecklace, "earrings:", !!selectedEarrings, "bracelet:", !!selectedBracelet);
       }
-    }, 300);
+    }, 5000);
 
     sendResponse({ status: "ok" });
   }

@@ -199,6 +199,29 @@ function renderResults(products, elapsedSeconds) {
   products.forEach((product, index) => {
     grid.appendChild(createProductCard(product, index));
   });
+
+  // After images load, capture a screenshot and forward results + screenshot to popup
+  // so the voice agent (Giselle) can "see" the products and recommend items visually
+  setTimeout(() => {
+    const productData = products.map((p, i) => ({
+      number: i + 1,
+      title: p.title || "",
+      price: p.price || "",
+      rating: p.rating || "",
+      reviewCount: p.review_count || "",
+      imageUrl: p.image_url || "",
+      productUrl: p.product_url || "",
+    }));
+    chrome.runtime.sendMessage({ type: "CAPTURE_TAB_SCREENSHOT" }, (resp) => {
+      const screenshot = resp?.data || null;
+      chrome.runtime.sendMessage({
+        type: "SEARCH_RESULTS_LOADED",
+        products: productData,
+        screenshot,
+      });
+      console.log("[SmartSearch] Forwarded", productData.length, "results + screenshot:", !!screenshot);
+    });
+  }, 1500); // wait for product images to render
 }
 
 function createProductCard(product, index) {
@@ -461,7 +484,7 @@ async function handleTryOn(index) {
 
     const response = await withTimeout(
       ApiClient.tryOn(
-        null,                                              // bodyImage = null → backend fetches from S3
+        null,                                              // bodyImage = null → backend fetches from GCS
         garmentBase64,                                     // garment image
         analysisResult ? analysisResult.garmentClass : null, // garmentClass from analysis
         "SEAMLESS",                                        // mergeStyle

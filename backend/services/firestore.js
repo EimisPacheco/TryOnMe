@@ -101,6 +101,8 @@ async function saveVideoRecord(userId, videoData) {
     productTitle: videoData.productTitle || "",
     productImage: videoData.productImage || "",
     savedAt: new Date().toISOString(),
+    // Outfit item links (from outfit builder — up to 6 items)
+    ...(videoData.outfitItems && { outfitItems: videoData.outfitItems }),
   };
   await db.collection('userProfiles').doc(userId)
     .collection('videos').doc(videoData.videoId).set(item);

@@ -52,6 +52,27 @@ The outfit builder supports **6 categories**: top, bottom, shoes, necklace, earr
 - Try-on requires top AND bottom selected (shoes required only if shoes query was specified)
 - Do NOT reduce the number of categories below 6
 
+### Voice Agent (Giselle Live) — CRITICAL Configuration
+- **Model**: `gemini-2.5-flash-native-audio-latest` (in `backend/services/giselleLive.js`)
+- This is a **native audio** model — it generates speech directly, NOT text-to-speech
+- Do NOT change this model name. Other models (e.g. `gemini-2.0-flash`, `gemini-2.0-flash-live-001`) do NOT support native audio and will cause 1008 WebSocket errors
+- **sessionResumption config**:
+  - First connect: pass empty object `{}` — do NOT pass `{ handle: null }` (causes 1008 "Operation not implemented" error)
+  - Reconnect: pass `{ handle: resumptionHandle }` with the handle received from `goAway` event
+  - Code: `sessionResumption: resumptionHandle ? { handle: resumptionHandle } : {}`
+- **Required config fields** (do NOT remove any):
+  - `responseModalities: [Modality.AUDIO]`
+  - `inputAudioTranscription: {}`
+  - `outputAudioTranscription: {}`
+  - `speechConfig` with `voiceName: "Aoede"`
+- **Known issues that were fixed**:
+  - Passing `sessionResumption: { handle: null }` on first connect → 1008 disconnect
+  - Using wrong model names (hallucinated names) → 1008 "model not found"
+  - `contextWindowCompression` is NOT needed and was removed
+- **WebSocket path**: `/ws/voice-live` (in `backend/server.js`)
+- **Vision**: Images sent via `sendImage()` using `session.sendClientContent()` with `inlineData` parts
+- Do NOT switch to ADK (Agent Development Kit) — the app uses `@google/genai` SDK's `ai.live.connect()` directly
+
 ## Tests
 - Run: `cd backend && npm test`
 - `__tests__/outfitBuilder.test.js` — validates 6-category search, concurrency limiter, outfit try-on with 7 images, URL param parsing, ASIN extraction

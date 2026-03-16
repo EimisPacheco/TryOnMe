@@ -31,13 +31,13 @@ function handleConnection(ws, req) {
 
     switch (msg.type) {
       case "start": {
-        // Initialize Gemini Live session
+        // Initialize or resume Gemini Live session
         if (sessionReady) {
           ws.send(JSON.stringify({ type: "error", message: "Session already started" }));
           return;
         }
         try {
-          await giselleLive.createSession(sessionId, ws, msg.userContext || {});
+          await giselleLive.createSession(sessionId, ws, msg.userContext || {}, msg.resumptionHandle || null);
           sessionReady = true;
         } catch (err) {
           console.error(`[voice-live] Session creation failed:`, err.message);
@@ -63,6 +63,13 @@ function handleConnection(ws, req) {
         if (!sessionReady) return;
         if (!msg.text || typeof msg.text !== "string") return;
         giselleLive.sendText(sessionId, msg.text);
+        break;
+      }
+
+      case "image": {
+        if (!sessionReady) return;
+        if (!msg.data) return;
+        giselleLive.sendImage(sessionId, msg.data, msg.mimeType || "image/jpeg", msg.context || null);
         break;
       }
 

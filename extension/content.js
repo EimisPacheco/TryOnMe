@@ -144,7 +144,31 @@
   // ---------------------------------------------------------------------------
   let contextMenuImageUrl = null;
 
-  chrome.runtime.onMessage.addListener((msg, _sender, _sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    // Voice agent: save to favorites
+    if (msg.type === "SAVE_TO_FAVORITES") {
+      const favBtn = document.querySelector(".nova-tryon-favorite-btn:not(.nova-tryon-favorite-btn--saved)");
+      if (favBtn) {
+        favBtn.click();
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: "No unsaved try-on result found" });
+      }
+      return false;
+    }
+
+    // Voice agent: save video
+    if (msg.type === "SAVE_VIDEO") {
+      const saveBtn = document.querySelector(".nova-tryon-save-video-btn:not(:disabled)");
+      if (saveBtn) {
+        saveBtn.click();
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: "No video to save" });
+      }
+      return false;
+    }
+
     if (msg.type !== "CONTEXT_MENU_TRYON") return false;
     console.log("[GeminiTryOnMe] Context menu try-on triggered:", msg.imageUrl?.substring(0, 80));
     contextMenuImageUrl = msg.imageUrl;
@@ -478,12 +502,13 @@
     const card = document.createElement("div");
     card.className = "nova-tryon-overlay-card";
     card.setAttribute("tabindex", "-1"); // Prevent Temu's autofocus management from interfering
+    card.setAttribute("data-nova-tryon", "true"); // Mark as our element so Temu's React doesn't manage it
     card.innerHTML = `
       <div class="nova-tryon-overlay-header">
         <h3>Gemini TryOnMe Everything</h3>
         <button class="nova-tryon-overlay-close" aria-label="Close">&times;</button>
       </div>
-      <div class="nova-tryon-overlay-body">
+      <div class="nova-tryon-overlay-body" inert>
         <div class="nova-tryon-loading">
           <div class="nova-tryon-spinner"></div>
           <div class="nova-tryon-loading-text">Generating your virtual try-on...</div>
@@ -634,7 +659,7 @@
       let resultImage;
       let debugInfo = null;
 
-      // Read selected pose index (stored locally, backend fetches actual image from S3)
+      // Read selected pose index (stored locally, backend fetches actual image from GCS)
       const currentPoseIdx = await new Promise((resolve) => {
         chrome.storage.local.get(["selectedPoseIndex"], (r) => resolve(r.selectedPoseIndex || 0));
       });
@@ -669,7 +694,7 @@
         );
         resultImage = response.resultImage;
       } else {
-        // Send null as bodyImage so backend fetches the correct pose from S3 using poseIndex
+        // Send null as bodyImage so backend fetches the correct pose from GCS using poseIndex
         console.log(`[GeminiTryOnMe] Try-on params — poseIdx: ${currentPoseIdx}, framing: "${currentFraming}" (type: ${typeof currentFraming}), garmentClass: ${analysisResult ? analysisResult.garmentClass : 'null'}`);
         const response = await ApiClient.tryOn(
           null,
@@ -701,6 +726,7 @@
       // Check if the result image is valid
       if (!resultImage) {
         console.error("[GeminiTryOnMe] No result image returned from API");
+        body.removeAttribute("inert"); // Allow interaction with error UI
         body.innerHTML = `
           <div class="nova-tryon-error-msg">
             <p>No image was generated. Please try again.</p>
@@ -747,6 +773,8 @@
       }
 
       // Display the result (minimal overlay — controls are in the side panel)
+      // Remove inert so buttons/interactions work now that result is ready
+      body.removeAttribute("inert");
       const resultDataUrl = base64ToDataUrl(resultImage);
       body.innerHTML = `
         <div class="nova-tryon-result">
@@ -822,7 +850,7 @@
 
       // Store debug images — fetch the actual pose used from backend
       if (debugInfo) {
-        // Get the pose image the backend actually used (from S3 via poseIndex)
+        // Get the pose image the backend actually used (from GCS via poseIndex)
         let debugBodyPhoto = photos.bodyPhoto;
         try {
           const allPhotos = await new Promise((resolve, reject) => {
@@ -936,6 +964,7 @@
 
     } catch (err) {
       clearInterval(timerInterval);
+      body.removeAttribute("inert"); // Allow interaction with error UI
       console.error("%c ✗ TRY-ON FAILED %c " + err.message, "background:#f44336;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px;", "color:#f44336;font-weight:bold;");
       body.innerHTML = `
         <div class="nova-tryon-error">
@@ -1211,7 +1240,7 @@
         </div>
       `;
 
-      // Wire Save button (upload to S3)
+      // Wire Save button (upload to GCS)
       const saveBtn = videoContainer.querySelector(".nova-tryon-save-video-btn");
       saveBtn.addEventListener("click", async () => {
         saveBtn.textContent = "Saving...";

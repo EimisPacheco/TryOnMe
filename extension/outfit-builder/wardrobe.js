@@ -627,7 +627,7 @@ async function handleTryOn() {
 
     const result = await sendMessage({
       type: "TRY_ON_OUTFIT",
-      bodyImageBase64: null, // backend fetches from S3
+      bodyImageBase64: null, // backend fetches from GCS
       garments: fetchResults,
       framing: "full",
       poseIndex: selectedPoseIndex,
@@ -986,6 +986,20 @@ async function handleAnimate() {
         } else {
           videoUrlForSave = videoSrc;
         }
+        // Collect all 6 outfit item links for the video record
+        const outfitItems = [selectedTop, selectedBottom, selectedShoes, selectedNecklace, selectedEarrings, selectedBracelet]
+          .filter(Boolean)
+          .map(item => ({
+            title: item.title || "",
+            price: item.price || "",
+            productUrl: item.product_url || "",
+            imageUrl: item.image_url || "",
+            category: item._category || "",
+            asin: (() => {
+              const m = (item.product_url || "").match(/\/(?:dp|gp\/product)\/([A-Za-z0-9]{10})/);
+              return m ? m[1] : (item.asin || item.productId || "");
+            })(),
+          }));
         await sendMessage({
           type: "API_CALL",
           method: "POST",
@@ -993,7 +1007,8 @@ async function handleAnimate() {
           data: {
             videoBase64,
             videoUrl: videoUrlForSave,
-            productTitle: [selectedTop, selectedBottom, selectedShoes].filter(Boolean).map(i => (i.title || "").split(" ").slice(0, 3).join(" ")).join(" + "),
+            productTitle: [selectedTop, selectedBottom, selectedShoes, selectedNecklace, selectedEarrings, selectedBracelet].filter(Boolean).map(i => (i.title || "").split(" ").slice(0, 3).join(" ")).join(" + "),
+            outfitItems,
           },
         });
         newBtn.innerHTML = "&#9989; Saved!";

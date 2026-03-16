@@ -46,6 +46,8 @@ router.put("/", requireAuth, async (req, res, next) => {
     const sex = req.body.sex === "male" || req.body.sex === "female" ? req.body.sex : undefined;
     const clothesSize = sanitize(req.body.clothesSize);
     const shoesSize = req.body.shoesSize ? String(req.body.shoesSize).trim().slice(0, 20) : undefined;
+    const validLanguages = ["en", "es", "fr", "de", "it", "pt", "ja", "zh", "ko", "hi", "ar"];
+    const language = validLanguages.includes(req.body.language) ? req.body.language : undefined;
 
     // Calculate age from birthday
     let age = null;
@@ -75,6 +77,7 @@ router.put("/", requireAuth, async (req, res, next) => {
       sex: sex || existing.sex,
       clothesSize: clothesSize || existing.clothesSize,
       shoesSize: shoesSize || existing.shoesSize,
+      language: language || existing.language || "en",
       country: country || existing.country,
       city: city || existing.city,
       email: req.userEmail || existing.email,
